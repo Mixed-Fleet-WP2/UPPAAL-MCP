@@ -1,0 +1,6 @@
+
+Verifying formula 1 at tests/fixtures/sat.q:1
+ -- Formula MAY be satisfied.
+
+Verifying formula 2 at tests/fixtures/sat.q:2
+ -- Formula is satisfied.

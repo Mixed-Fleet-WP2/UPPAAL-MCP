@@ -1,0 +1,16 @@
+
+Verifying formula 1 at queries/train_gate.q:2
+ -- Aborted.
+ -- States stored : 196607 states
+ -- States explored : 196605 states
+ -- CPU user time used : 377 ms
+ -- Virtual memory used : 74552 KiB
+ -- Resident memory used : 33004 KiB
+
+Verifying formula 2 at queries/train_gate.q:5
+ -- Formula is NOT satisfied.
+ -- States stored : 4 states
+ -- States explored : 2 states
+ -- CPU user time used : 36 ms
+ -- Virtual memory used : 74552 KiB
+ -- Resident memory used : 33004 KiB

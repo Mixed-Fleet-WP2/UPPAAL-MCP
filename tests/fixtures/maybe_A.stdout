@@ -1,0 +1,6 @@
+
+Verifying formula 1 at queries/train_gate.q:2
+ -- Formula is satisfied.
+
+Verifying formula 2 at queries/train_gate.q:5
+ -- Formula MAY NOT be satisfied.

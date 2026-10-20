@@ -1,0 +1,26 @@
+
+Verifying formula 2 at queries/train_gate.q:5
+ -- Formula is NOT satisfied.
+ -- Showing witness trace:
+
+State:
+( train.Far gate.Up )
+crossings=0
+train.x-gate.y<=0 and gate.y-train.x<=0
+
+Transition:
+  train.Far->train.Near { 1, appr!, x := 0 }
+  gate.Up->gate.Lowering { 1, appr?, y := 0 }
+
+State:
+( train.Near gate.Lowering )
+crossings=0
+train.x<=15 and train.x-gate.y<=0 and gate.y<=15 and gate.y-train.x<=0
+
+Transition:
+  train.Near->train.Cross { x >= 10, tau, x := 0 }
+
+State:
+( train.Cross gate.Lowering )
+crossings=0
+gate.y>=10 and train.x<=5 and train.x-gate.y<=-10 and gate.y<=15 and gate.y-train.x<=15

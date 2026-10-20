@@ -1,0 +1,1 @@
+tests/fixtures/overflow.xml:/nta/template[1]/transition[3]/label[2]:1: [error] Assignment of value '32768' to variable 'crossings' is out of range.

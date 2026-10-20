@@ -1,0 +1,16 @@
+
+Verifying formula 1 at tests/fixtures/sat.q:1
+ -- Formula is satisfied.
+ -- States stored : 24 states
+ -- States explored : 24 states
+ -- CPU user time used : 1 ms
+ -- Virtual memory used : 62204 KiB
+ -- Resident memory used : 18176 KiB
+
+Verifying formula 2 at tests/fixtures/sat.q:2
+ -- Formula is satisfied.
+ -- States stored : 4 states
+ -- States explored : 2 states
+ -- CPU user time used : 1 ms
+ -- Virtual memory used : 62220 KiB
+ -- Resident memory used : 18212 KiB

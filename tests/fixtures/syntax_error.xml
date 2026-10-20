@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE nta PUBLIC '-//Uppaal Team//DTD Flat System 1.6//EN' 'http://www.it.uu.se/research/group/darts/uppaal/flat-1_6.dtd'>
+<nta>
+	<declaration>// Level crossing: one train, one gate.
+// Known design bug: the train may enter the crossing 10 time units after
+// approaching, but the gate may need up to 15 time units to close.
+chan appr, leave;
+int[0,3] crossings = 0;</declaration>
+	<template>
+		<name>Train</name>
+		<declaration>clock x;</declaration>
+		<location id="id0" x="0" y="0">
+			<name x="-10" y="-34">Far</name>
+		</location>
+		<location id="id1" x="200" y="0">
+			<name x="190" y="-34">Near</name>
+			<label kind="invariant" x="190" y="17">x &lt;= 20</label>
+		</location>
+		<location id="id2" x="200" y="150">
+			<name x="190" y="167">Cross</name>
+			<label kind="invariant" x="190" y="184">x &lt;= 5</label>
+		</location>
+		<init ref="id0"/>
+		<transition id="id3">
+			<source ref="id0"/>
+			<target ref="id1"/>
+			<label kind="synchronisation" x="80" y="-25">appr!</label>
+			<label kind="assignment" x="80" y="0">x = 0</label>
+		</transition>
+		<transition id="id4">
+			<source ref="id1"/>
+			<target ref="id2"/>
+			<label kind="guard" x="210" y="50">x x &gt;= 10gt;= 10 x &gt;= 10amp;x &gt;= 10amp; undefined_var</label>
+			<label kind="assignment" x="210" y="70">x = 0</label>
+		</transition>
+		<transition id="id5">
+			<source ref="id2"/>
+			<target ref="id0"/>
+			<label kind="synchronisation" x="60" y="60">leave!</label>
+			<label kind="assignment" x="60" y="80">crossings = (crossings + 1) % 4</label>
+		</transition>
+	</template>
+	<template>
+		<name>Gate</name>
+		<declaration>clock y;</declaration>
+		<location id="id6" x="0" y="0">
+			<name x="-10" y="-34">Up</name>
+		</location>
+		<location id="id7" x="200" y="0">
+			<name x="190" y="-34">Lowering</name>
+			<label kind="invariant" x="190" y="17">y &lt;= 15</label>
+		</location>
+		<location id="id8" x="200" y="150">
+			<name x="190" y="167">Down</name>
+		</location>
+		<location id="id9" x="0" y="150">
+			<name x="-10" y="167">Raising</name>
+			<label kind="invariant" x="-10" y="184">y &lt;= 10</label>
+		</location>
+		<init ref="id6"/>
+		<transition id="id10">
+			<source ref="id6"/>
+			<target ref="id7"/>
+			<label kind="synchronisation" x="80" y="-25">appr?</label>
+			<label kind="assignment" x="80" y="0">y = 0;;</label>
+		</transition>
+		<transition id="id11">
+			<source ref="id7"/>
+			<target ref="id8"/>
+			<label kind="guard" x="210" y="50">y &gt;= 12</label>
+		</transition>
+		<transition id="id12">
+			<source ref="id8"/>
+			<target ref="id9"/>
+			<label kind="synchronisation" x="80" y="125">leave?</label>
+			<label kind="assignment" x="80" y="150">y = 0;;</label>
+		</transition>
+		<transition id="id13">
+			<source ref="id9"/>
+			<target ref="id6"/>
+			<label kind="guard" x="-60" y="70">y &gt;= 5</label>
+		</transition>
+	</template>
+	<system>train = Train();
+gate = Gate();
+system train, gate;</system>
+	<queries>
+	</queries>
+</nta>

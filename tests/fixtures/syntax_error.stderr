@@ -1,0 +1,3 @@
+tests/fixtures/syntax_error.xml:/nta/template[1]/transition[2]/label[1]:1: [error] syntax error: unexpected T_ID, expecting end of file.
+tests/fixtures/syntax_error.xml:/nta/template[2]/transition[1]/label[2]:1: [error] syntax error: unexpected ';', expecting end of file.
+tests/fixtures/syntax_error.xml:/nta/template[2]/transition[3]/label[2]:1: [error] syntax error: unexpected ';', expecting end of file.

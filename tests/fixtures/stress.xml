@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<nta><declaration>int[0,996] v0;
+int[0,996] v1;
+int[0,996] v2;
+int[0,996] v3;
+int[0,996] v4;
+int[0,996] v5;</declaration><template><name>C0</name><location id="c0a"><name>L</name></location><init ref="c0a"/>
+<transition><source ref="c0a"/><target ref="c0a"/><label kind="assignment">v0 = (v0 + 1) % 997</label></transition></template><template><name>C1</name><location id="c1a"><name>L</name></location><init ref="c1a"/>
+<transition><source ref="c1a"/><target ref="c1a"/><label kind="assignment">v1 = (v1 + 2) % 997</label></transition></template><template><name>C2</name><location id="c2a"><name>L</name></location><init ref="c2a"/>
+<transition><source ref="c2a"/><target ref="c2a"/><label kind="assignment">v2 = (v2 + 3) % 997</label></transition></template><template><name>C3</name><location id="c3a"><name>L</name></location><init ref="c3a"/>
+<transition><source ref="c3a"/><target ref="c3a"/><label kind="assignment">v3 = (v3 + 4) % 997</label></transition></template><template><name>C4</name><location id="c4a"><name>L</name></location><init ref="c4a"/>
+<transition><source ref="c4a"/><target ref="c4a"/><label kind="assignment">v4 = (v4 + 5) % 997</label></transition></template><template><name>C5</name><location id="c5a"><name>L</name></location><init ref="c5a"/>
+<transition><source ref="c5a"/><target ref="c5a"/><label kind="assignment">v5 = (v5 + 6) % 997</label></transition></template><system>c0 = C0();
+c1 = C1();
+c2 = C2();
+c3 = C3();
+c4 = C4();
+c5 = C5();
+system c0, c1, c2, c3, c4, c5;</system></nta>

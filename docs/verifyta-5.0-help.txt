@@ -1,0 +1,255 @@
+Usage: verifyta [OPTION]... MODEL QUERY
+where MODEL is a model file and QUERY is a query file.
+If QUERY is missing it will be guessed.
+Display:
+  -h [ --help ]                        produce help message
+  -v [ --version ]                     Show version number.
+  --stdc-version                       display the used Standard C library 
+                                       version information.
+
+General:
+  --query-index arg                    Index of query to verify. If not 
+                                       specified, all queries are verified.
+  -H [ --hashtable-size ] arg          Set hash table size for bit state 
+                                       hashing to 2**n bits
+                                       (default = 27)
+  -n [ --extrapolation ] arg           <0|1|2|3|4>
+                                       Select extrapolation operator (default 
+                                       0):
+                                        0:Automatic,
+                                        1:No extrapolation (use with care),
+                                        2:Difference extrapolation,
+                                        3:Location based extrapolation,
+                                        4:Lower/upper (LU) extrapolation
+  -t [ --diagnostic ] arg              <0|1|2>
+                                       Generate diagnostic information on 
+                                       stderr.
+                                        0:Some trace
+                                        1:Shortest trace (disables reuse)
+                                        2:Fastest trace (disables reuse)
+  -o [ --search-order ] arg            <0|1|2|3|4>
+                                       Select search order.  Only 0 and 1 for 
+                                       TIGA properties.
+                                        0:Breadth first (short-hand -b)
+                                        1:Depth first (short-hand -d)
+                                        2:Random depth first
+                                        3:Optimal first (requires -t1 or -t2)
+                                        4:Random optimal depth first (requires 
+                                          -t1 or -t2)
+  --exploration arg                    <0|1>
+                                       State space exploration (default 0):
+                                        0:Exhaustive (based on symbolic 
+                                          techniques),
+                                        1:Randomized heuristics (based on 
+                                          concrete states)
+  --state-representation arg           <0|1|2|3>
+                                       Symbolic state (zone) representation 
+                                       (default 1):
+                                        0:Difference Bound Matrix (DBM, 
+                                          short-hand -C),
+                                        1:compact DBM (uses less space but more
+                                          time than plain DBM),
+                                        2:bit-state hashing under-approximation
+                                          (short-hand -Z),
+                                        3:convex-hull over-approximation 
+                                          (short-hand -A).
+  --discrete-representation arg        <0|1>
+                                       Discrete state (location and integer) 
+                                       representation:
+                                        0:hashmap with compression,
+                                        1:hashmap with raw copy
+  -S [ --statespace-consumption ] arg  <0|1|2|3>
+                                       Reduce memory space consumption (default
+                                       1):
+                                        0:no optimizations,
+                                        1:conservative,
+                                        2:aggressive,
+                                        3:extreme
+  -T [ --reuse-statespace ]            Reuse state space when several 
+                                       properties are examined.
+  -M [ --modest ]                      activate Modest semantics for updates.
+  --random-semantics arg               <0|1>
+                                          Semantics for random in ConcSim
+                                        0: Based on syntatic model structure
+                                        1: Use probability distributions 
+                                       defined in model
+
+Randomized Options:
+  --rand-heur arg                      <0|1|2|3>Randomized heuristic (default 
+                                       0): 0:random enabled transition (RET, 
+                                       targets rare events),
+                                        1:random least coverage (RLC, targets 
+                                          unexplored edges),
+                                        2:random least coverage accumulative 
+                                          (RLC-A, w/o coverage reset),
+                                        3:tokenized (experimental),
+                                        4:semantic (SEM, uses uniform delay 
+                                          distribution for all delays).
+  --rdepth arg                         maximum random walk depth.
+  --rtimeout arg                       timeout in seconds (default: 300).
+
+Output:
+  -f [ --prefix ] arg                  Write symbolic traces to files 
+                                       'prefix-n.xtr' rather than to stderr.
+  -W                                   Disable warnings
+  -y [ --post-symbolic ]               Display traces symbolically 
+                                       (post-stable).
+  -Y [ --pre-symbolic ]                Display traces symbolically (pre- and 
+                                       post-stable).
+  -q [ --nosummary ]                   Do not display the option summary.
+  -x [ --save-document ] arg           Save the (modified) document in XML 
+                                       format, in file 'arg'.
+                                       If the document has been modified, an 
+                                       associated query file is created.
+  -X [ --save-trace ] arg              Save the symbolic trace in file 
+                                       'prefixPropertynumber.xml'
+  -O [ --simulation-format ] arg       write the filtered simulation 
+                                       trajectories to:
+                                       std: one trajectory per line into 
+                                            standard output (default)
+                                       csv: one trajectory per file in 
+                                            comma-separated-values format.
+  -G [ --fmu ] arg                     Generate FMU at given location
+
+Miscellaneous:
+  -k [ --key ] arg                     Activate the license with a given key.
+  -l [ --lease ] arg                   License-device binding period in hours 
+                                       (default 48). During the binding period 
+                                       the license cannot be moved to another 
+                                       computer. The lease is renewed over 
+                                       Internet after the binding period is 
+                                       over.
+  --lease-request                      Generate and print a lease request.
+  --lease-install                      Read the lease from input and install 
+                                       it.
+  -s [ --silence-progress ]            Do not display the progress indicator.
+  -u [ --summary ]                     Show verification summary at the end 
+                                       (incorrect for liveness properties).
+  --test-alpha arg                     test mode: check the results against 
+                                       expectation with this level of 
+                                       significance. Only the queries with 
+                                       EXPECT comment or field are executed. 
+                                       Values: [0.0,0.5], where 0 (default) 
+                                       disables testing.
+
+SMC:
+  -p [ --lower-delta ] arg             lower (delta) probabilistic uncertainty.
+  -P [ --upper-delta ] arg             upper (delta) probabilistic uncertainty.
+  -a [ --alpha ] arg                   probability of false negatives (alpha).
+  -B [ --beta ] arg                    probability of false positives (beta).
+  -E [ --epsilon ] arg                 probability uncertainty (epsilon).
+  -i [ --u0 ] arg                      threshold u0 for comparing 
+                                       probabilities.
+  -j [ --u1 ] arg                      threshold u1 for comparing 
+                                       probabilities.
+  -w [ --histogram-bar-width ] arg     width of buckets in histogram (default: 
+                                       0, automatic). Mutually exclusive with 
+                                       --histogram-bar-count
+  --histogram-bar-count arg            number of buckets in histogram (default:
+                                       0, automatic). Mutually exclusive with 
+                                       --histogram-bar-width
+  -c [ --parametric-comp ] arg         <0|1>
+                                       activate (1) or not (0) the SMC 
+                                       parametric comparison.
+  -V [ --smc-coverage ]                activate SMC coverage.
+  -R [ --resolution ] arg              simulation resolution (pixels).
+  -D [ --discretization ] arg          discretization step size (time) for 
+                                       hybrid systems.
+  --truncation-error arg               bound on error estimate for adaptive 
+                                       step-size (minimum delta enforced by 
+                                       -D).
+  --truncation-time-error arg          bound on error estimate for adaptive 
+                                       step-size over time (minimum delta 
+                                       enforced by -D).
+  -L [ --probability-log ] arg         SMC-Log file.
+  -F [ --sampling-time ] arg           outputs to a file a sampling of 
+                                       simulations (when simulate is used).
+  -r [ --seed ] arg                    Set seed for random number generator 
+                                       (default is current time).
+
+TiGa:
+  --backwards-order arg                <0|1>
+                                       0: Breadth first
+                                       1: Depth first (default)
+  --priority-order arg                  <0|1|2|3|4>
+                                         0: Automatic (default); reachability =
+                                       -o0O1F3; safety = -o0O0F2
+                                         1: Mixed search, i.e., one queue
+                                         2: Forward first
+                                         3: Backward first
+                                         4: Alternate forward/backward
+  --strategy-store arg                 <0|1> store (TIGA) strategies using
+                                          0: federations
+                                          1: CDDs (default)
+  --generate-strategy arg              Generate strategies (TIGA)
+                                       1 and 2: no E<> control: or time optimal
+                                       properties.
+                                         0: Some strategy
+                                         1: All winning actions of the current 
+                                       result (the search ends as soon
+                                       as the initial state is known to be 
+                                       losing or winning)
+                                         2: All winning actions of all the 
+                                       states (explore them all)
+  --learning-method arg                <0-5>
+                                       Learning method used for TIGA-SMC
+                                        -1: External Learning (experimental)
+                                         0: Covariance Matrix
+                                         1: Splitting
+                                         2: Logistic Regression
+                                         3: Naive
+                                         4: Q-learning
+                                         5: Model-Learning
+                                       
+  --good-runs arg                      Use <number> good runs for each learning
+  --total-runs arg                     Number of total runs to attempt for 
+                                       learning
+  --runs-pr-state arg                  Number of good runs stored per discrete 
+                                       state
+  --eval-runs arg                      Number of runs used for evaluation of 
+                                       strategies
+  --max-iterations arg                 Maximal total number of iterations in 
+                                       the learning algorithm
+  --max-imitation arg                  Maximal number of iterations to use for 
+                                       imitations
+  --reset-no-better arg                Number of iterations performed in which 
+                                       the strategy does not improve before 
+                                       resetting
+  --max-reset-learning arg             The maximum number of resets to do in 
+                                       the learning algorithm
+  --filter arg                         <0|1|2>
+                                         Filter method used for TIGA-SMC
+                                             0: Local Heap filtering method
+                                             1: Sweep filtering method
+                                             2: Global Heap filtering method
+                                       
+  --random-search-limit arg            Percentage of runs in a batch before 
+                                       where fully random strategy is used for 
+                                       sampling (only Q and M learning)
+  --deterministic-search-limit arg     Percentage of runs in a batch before 
+                                       pure deterministic strategy is used for 
+                                       sampling (only Q and M learning)
+  --qlearning-alpha arg                1/n learning-rate for q-learning
+  --split-upper-t arg                  Upper limit for t-measure
+  --split-lower-t arg                  Lower limit for t-measure
+  --split-ks arg                       Critical value for KS-test
+  --split-filter-rate arg              Rate of increase for splitting filter
+  --split-filter-val arg               Critical value for splitting filter
+  --discount arg                       Discount-value used to avoid infinite 
+                                       positive/negative cycles when learning
+  --indifference-smoothing arg         Number of previous runs to smooth 
+                                       indiference over
+  --indifference-scale arg             Multiplier of indifference
+
+The ordering of options is significant.
+
+Environment variables:
+  UPPAAL_DUMP_STATE          output a state satisfying the property.
+  UPPAAL_DISABLE_SWEEPLINE   disable sweepline method
+  UPPAAL_DISABLE_OPTIMISER   disable peephole optimiser
+  UPPAAL_DISABLE_SYMMETRY    disable symmetry reduction
+  UPPAAL_COMPILE_ONLY        write compiled model to stdout and stop
+  UPPAAL_OLD_SYNTAX          use UPPAAL 3.4 syntax
+
+The value of these variables does not matter. Defining them is
+enough to activate the feature in question.

@@ -1,0 +1,3 @@
+models/train_gate.xml::1: [error] has no member named Nowhere.
+models/train_gate.xml::1: [error] Type error.
+models/train_gate.xml::2: [error] syntax error: unexpected '\n'.

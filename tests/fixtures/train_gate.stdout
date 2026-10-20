@@ -1,0 +1,17 @@
+
+Verifying formula 1 at queries/train_gate.q:2
+ -- Formula is satisfied.
+ -- States stored : 24 states
+ -- States explored : 24 states
+ -- CPU user time used : 2 ms
+ -- Virtual memory used : 62220 KiB
+ -- Resident memory used : 18024 KiB
+
+Verifying formula 2 at queries/train_gate.q:5
+ -- Formula is NOT satisfied.
+ -- States stored : 4 states
+ -- States explored : 2 states
+ -- CPU user time used : 0 ms
+ -- Virtual memory used : 62236 KiB
+ -- Resident memory used : 18040 KiB
+XMLTrace outputted to: /tmp/claude-1000/-home-user-Desktop-Projects-uppaal-mcp/53f9d4a1-2167-4e02-ad48-c2f1cdd9d2cf/scratchpad/t/tg1.xml
