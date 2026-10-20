@@ -29,13 +29,16 @@ memory exhaustion) maps to ``timeout`` or ``error``.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 import resource
 import signal
 import subprocess
 import tempfile
+import threading
 import time
+from collections.abc import Iterator
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -404,6 +407,90 @@ def run_process(cmd: list[str], timeout_s: float, memory_mb: int, cwd: Path | No
     return out or "", err or "", proc.returncode, timed_out, time.monotonic() - start
 
 
+@dataclass
+class SyntaxCheck:
+    ok: bool
+    diagnostics: list[Diagnostic]
+    message: str = ""
+
+
+def compile_model(model: Path, timeout_s: float = 30.0, verifyta: str | None = None) -> SyntaxCheck:
+    """Compile ``model`` without verifying anything (``UPPAAL_COMPILE_ONLY``).
+
+    Detects syntax and type errors in declarations, guards, invariants, updates
+    and the system declaration. Runtime errors (e.g. integer overflow) are only
+    found by ``verify``.
+    """
+    verifyta = verifyta or os.environ.get("VERIFYTA", DEFAULT_VERIFYTA)
+    env = {**os.environ, "UPPAAL_COMPILE_ONLY": "1"}
+    start = time.monotonic()
+    proc = subprocess.Popen(
+        [verifyta, "-q", "-s", str(model)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        stdin=subprocess.DEVNULL,
+        text=True,
+        env=env,
+        start_new_session=True,
+    )
+    try:
+        _, err = proc.communicate(timeout=timeout_s)
+    except subprocess.TimeoutExpired:
+        _kill_group(proc)
+        return SyntaxCheck(False, [], f"Compilation did not finish within {timeout_s:g}s ({time.monotonic() - start:.1f}s).")
+    diags = parse_diagnostics(err or "")
+    ok = proc.returncode == 0 and not any(d.severity == "error" for d in diags)
+    msg = "" if ok else (f"verifyta exited with code {proc.returncode}: {(err or '').strip()[:500]}" if not diags else "")
+    return SyntaxCheck(ok, diags, msg)
+
+
+def check_queries(model: Path, query_file: Path, timeout_s: float = 30.0, verifyta: str | None = None) -> SyntaxCheck:
+    """Type-check the queries in ``query_file`` against ``model`` without verifying them.
+
+    verifyta compiles all queries before verifying the first one, and exits with
+    diagnostics if any query is invalid. We start a real run and stop it as soon
+    as ``Verifying formula 1`` appears (or the process exits).
+    """
+    verifyta = verifyta or os.environ.get("VERIFYTA", DEFAULT_VERIFYTA)
+    proc = subprocess.Popen(
+        [verifyta, "-q", "-s", str(model), str(query_file)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        stdin=subprocess.DEVNULL,
+        text=True,
+        start_new_session=True,
+    )
+    timer = threading.Timer(timeout_s, _kill_group, args=(proc,))
+    timer.start()
+    started = False
+    try:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            if line.startswith("Verifying formula"):
+                started = True
+                break
+    finally:
+        timer.cancel()
+        if proc.poll() is None:
+            _kill_group(proc)
+        _, err = proc.communicate()
+    diags = parse_diagnostics(err or "")
+    if started and not any(d.severity == "error" for d in diags):
+        return SyntaxCheck(True, diags)
+    if diags:
+        return SyntaxCheck(False, diags)
+    return SyntaxCheck(False, [], f"Could not determine query validity (exit code {proc.returncode}).")
+
+
+@contextlib.contextmanager
+def inline_query_file(query_text: str) -> Iterator[Path]:
+    """Write ``query_text`` to a temporary ``.q`` file and yield its path."""
+    with tempfile.TemporaryDirectory(prefix="uppaal-mcp-") as tmp:
+        path = Path(tmp) / "inline.q"
+        path.write_text(query_text.rstrip("\n") + "\n")
+        yield path
+
+
 def verify(
     model: Path,
     query_file: Path | None = None,
@@ -431,10 +518,9 @@ def verify(
     if not model.is_file():
         raise VerifytaOptionError(f"Model file not found: {model}")
 
-    with tempfile.TemporaryDirectory(prefix="uppaal-mcp-") as tmp:
+    with contextlib.ExitStack() as stack:
         if query_text is not None:
-            query_file = Path(tmp) / "inline.q"
-            query_file.write_text(query_text.rstrip("\n") + "\n")
+            query_file = stack.enter_context(inline_query_file(query_text))
         assert query_file is not None
         if not query_file.is_file():
             raise VerifytaOptionError(f"Query file not found: {query_file}")

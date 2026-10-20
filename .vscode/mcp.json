@@ -1,0 +1,15 @@
+{
+  "servers": {
+    "uppaal": {
+      "type": "stdio",
+      "command": "${workspaceFolder}/.venv/bin/python",
+      "args": ["-m", "server.main"],
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "VERIFYTA": "/home/user/Desktop/uppaal-5.0.0-linux64/bin/verifyta",
+        "UPPAAL_WORKSPACE": "${workspaceFolder}",
+        "UPPAAL_MEMORY_MB": "4096"
+      }
+    }
+  }
+}
