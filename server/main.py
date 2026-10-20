@@ -11,9 +11,11 @@ Configuration (environment variables):
 
 from __future__ import annotations
 
+import difflib
 import functools
 import json
 import os
+import tempfile
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any, Literal, TypeVar
@@ -408,6 +410,160 @@ async def get_trace(
         "steps": full,
         "trace_json": ws.rel(json_path),
         "raw_trace": ws.rel(raw),
+    }
+
+
+@mcp.tool()
+@safe_tool
+async def read_model(model: str) -> dict[str, Any]:
+    """Return the structure of a model as JSON.
+
+    Args:
+      model: model name or path inside ``models/``.
+
+    Returns:
+      ``{"status": "ok", "model", "git", "global_declarations", "templates": [...],
+      "system", "embedded_queries"}``. Each template has ``name``, ``parameters``,
+      ``declarations`` (local declarations text), ``locations`` and ``edges``.
+        - location: ``id``, ``name``, ``invariant`` (null if none), ``urgent``,
+          ``committed``, ``initial``, ``file_line``.
+        - edge: ``index`` (0-based within the template; use it as ``"edge"`` in
+          patch_model), ``id``, ``source``, ``target`` (location names), ``select``,
+          ``guard``, ``sync``, ``update`` (null if absent), ``file_line``.
+      ``embedded_queries`` are queries saved inside the .xml; they are NOT the
+      approved suite (that is ``queries/<model>.q``).
+    """
+    ws = _ws()
+    mpath = ws.model_path(model)
+    doc = mdl.Document.load(mpath)
+    return {"status": "ok", "model": ws.rel(mpath), "git": ws.git_info(mpath), **mdl.read_model(doc)}
+
+
+@mcp.tool()
+@safe_tool
+async def patch_model(model: str, operations: list[dict[str, Any]], reason: str, dry_run: bool = False) -> dict[str, Any]:
+    """Apply targeted edits to a model, syntax-check the result, and git-commit it.
+
+    All operations are applied in order to the current file. If any operation
+    fails, or the patched model does not compile, NOTHING is written. Untouched
+    parts of the file stay byte-identical. The model must have no uncommitted
+    changes (so the commit contains only this patch).
+
+    Args:
+      model: model name or path inside ``models/``.
+      operations: list of objects, each with an ``op`` field:
+        - {"op": "set_declaration", "scope": "global" | "system" | <template>, "text": "..."}
+        - {"op": "replace_in_declaration", "scope": ..., "old": "...", "new": "..."}
+          (``old`` must occur exactly once)
+        - {"op": "set_guard" | "set_sync" | "set_update" | "set_select",
+           "template": "Train", <edge selector>, "value": "x >= 15"}
+          (value "" removes the label)
+        - {"op": "set_invariant", "template": "Gate", "location": "Lowering", "value": "y <= 10"}
+        - {"op": "add_edge", "template": ..., "from": "A", "to": "B",
+           "guard"?: ..., "sync"?: ..., "update"?: ..., "select"?: ...}
+        - {"op": "remove_edge", "template": ..., <edge selector>}
+        - {"op": "add_location", "template": ..., "name": "Wait", "invariant"?: ...,
+           "kind"?: "normal" | "urgent" | "committed"}
+        - {"op": "remove_location", "template": ..., "location": "Wait"}
+          (also removes its incident edges; the initial location cannot be removed)
+        Edge selector: ``"edge": <index from read_model>``, or ``"edge_id": "id4"``,
+        or ``"from": "Near", "to": "Cross"`` (must match exactly one edge).
+        Locations are referred to by name (or id).
+      reason: why this change is made (used in the commit message), e.g.
+        "Fix R2: train must not enter the crossing before the gate is down".
+      dry_run: if true, check and return the diff without writing or committing.
+
+    Returns:
+      ``{"status": "ok" | "syntax_error" | "error", "dry_run", "changes": [...],
+      "behaviour_warnings": [{"op_index", "severity", "message"}],
+      "removes_behaviour": bool, "diff", "commit", "errors", "next_step"}``.
+      ``severity`` "removes_behaviour" (edge/location removed, guard or invariant set
+      to false) means the patch deletes executions: such a patch can make a property
+      pass by hiding the scenario instead of fixing it - say so to the user.
+      "may_change_behaviour" marks changed guards, invariants, syncs and
+      declarations. On "syntax_error", ``errors`` lists compiler errors with
+      ``file_line`` in the patched model; the file is unchanged.
+    """
+    ws = _ws()
+    mpath = ws.model_path(model)
+    if not reason or not reason.strip():
+        return _error("'reason' is required: describe why the model is changed.")
+    if not dry_run:
+        if not ws.is_git_repo():
+            return _error(f"{ws.root} is not a git repository; patch_model commits every change.")
+        if ws.git_info(mpath)["dirty"]:
+            return _error(
+                f"{ws.rel(mpath)} has uncommitted changes. Ask the user to commit or discard them first, "
+                "so the patch commit contains only this change."
+            )
+    original = mpath.read_text(encoding="utf-8")
+    doc = mdl.Document.from_text(original)
+    try:
+        changes = mdl.apply_operations(doc, operations)
+    except mdl.ModelError as e:
+        return _error(str(e) + " No changes were written.")
+    patched = doc.serialize()
+    warnings = [{"op_index": c.op_index, **f} for c in changes for f in c.flags]
+    result: dict[str, Any] = {
+        "model": ws.rel(mpath),
+        "dry_run": dry_run,
+        "changes": [c.description for c in changes],
+        "behaviour_warnings": warnings,
+        "removes_behaviour": any(w["severity"] == "removes_behaviour" for w in warnings),
+    }
+    if patched == original:
+        return {"status": "ok", **result, "diff": "", "commit": None, "message": "The operations did not change the file."}
+
+    def check() -> tuple[vt.SyntaxCheck, list[dict[str, Any]]]:
+        with tempfile.TemporaryDirectory(prefix="uppaal-mcp-") as tmp:
+            tmp_model = Path(tmp) / mpath.name
+            tmp_model.write_text(patched, encoding="utf-8")
+            res = vt.compile_model(tmp_model)
+            return res, mdl.locate_diagnostics(tmp_model, res.diagnostics)
+
+    syntax, errors = await anyio.to_thread.run_sync(check)
+    rel = ws.rel(mpath)
+    diff = "".join(
+        difflib.unified_diff(
+            original.splitlines(keepends=True), patched.splitlines(keepends=True), f"a/{rel}", f"b/{rel}"
+        )
+    )
+    if not syntax.ok:
+        return {
+            "status": "syntax_error",
+            **result,
+            "diff": diff,
+            "commit": None,
+            "errors": errors,
+            "message": (syntax.message or "The patched model does not compile.") + " No changes were written.",
+        }
+    if dry_run:
+        return {"status": "ok", **result, "diff": diff, "commit": None, "next_step": "Call again with dry_run=false to apply."}
+
+    tmp_path = mpath.with_name(f".{mpath.name}.tmp")
+    tmp_path.write_text(patched, encoding="utf-8")
+    os.replace(tmp_path, mpath)
+    lines = [f"Patch {rel}: {reason.strip()}", ""]
+    lines += [f"- {c}" for c in result["changes"]]
+    if warnings:
+        lines += ["", "Behaviour warnings:"] + [f"- [{w['severity']}] {w['message']}" for w in warnings]
+    lines += ["", "Applied by uppaal-mcp patch_model; syntax checked with verifyta."]
+    try:
+        commit = ws.commit_file(mpath, "\n".join(lines))
+    except WorkspaceError as e:
+        mpath.write_text(original, encoding="utf-8")
+        return _error(f"{e}. The model file was restored.")
+    approved = ws.approved_queries_for(mpath)
+    return {
+        "status": "ok",
+        **result,
+        "diff": ws.git("show", "--format=", "--no-color", commit, "--", rel).stdout or diff,
+        "commit": commit,
+        "next_step": (
+            f"Re-run the FULL approved suite: verify(model={mpath.stem!r})"
+            if approved.is_file()
+            else "No approved suite exists for this model; verify the relevant queries."
+        ),
     }
 
 

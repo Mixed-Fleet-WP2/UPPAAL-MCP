@@ -160,3 +160,69 @@ def test_get_trace_errors(ws: Path) -> None:
     assert call("get_trace", {"run_id": "nope"})["status"] == "error"
     assert call("get_trace", {"run_id": "../.."})["status"] == "error"
     assert call("get_trace", {"run_id": run["run_id"], "query_index": 2, "from_step": 5})["status"] == "error"
+
+
+FIX_R2 = [{"op": "set_guard", "template": "Train", "from": "Near", "to": "Cross", "value": "x > 15"}]
+
+
+def git_log(ws: Path) -> list[str]:
+    return subprocess.run(["git", "-C", str(ws), "log", "--format=%s"], capture_output=True, text=True).stdout.splitlines()
+
+
+def test_read_model_tool(ws: Path) -> None:
+    res = call("read_model", {"model": "train_gate"})
+    assert res["status"] == "ok" and [t["name"] for t in res["templates"]] == ["Train", "Gate"]
+    assert res["templates"][0]["edges"][1]["guard"] == "x >= 10"
+
+
+def test_patch_model_commits_and_fixes_r2(ws: Path) -> None:
+    res = call("patch_model", {"model": "train_gate", "operations": FIX_R2, "reason": "Fix R2: train waits for the gate"})
+    assert res["status"] == "ok" and res["commit"]
+    assert "-\t\t\t<label kind=\"guard\" x=\"210\" y=\"50\">x &gt;= 10</label>" in res["diff"]
+    assert "+\t\t\t<label kind=\"guard\" x=\"210\" y=\"50\">x &gt; 15</label>" in res["diff"]
+    assert not res["removes_behaviour"] and res["behaviour_warnings"][0]["severity"] == "may_change_behaviour"
+    assert git_log(ws)[0] == "Patch models/train_gate.xml: Fix R2: train waits for the gate"
+    body = subprocess.run(["git", "-C", str(ws), "log", "-1", "--format=%b"], capture_output=True, text=True).stdout
+    assert "guard of edge Train: Near -> Cross: 'x >= 10' -> 'x > 15'" in body
+    assert "verify(model='train_gate')" in res["next_step"]
+    run = call("verify", {"model": "train_gate"})
+    assert [q["verdict"] for q in run["queries"]] == ["satisfied", "satisfied"]
+
+
+def test_patch_model_dry_run_writes_nothing(ws: Path) -> None:
+    before = (ws / "models/train_gate.xml").read_text()
+    res = call("patch_model", {"model": "train_gate", "operations": FIX_R2, "reason": "try", "dry_run": True})
+    assert res["status"] == "ok" and res["dry_run"] and res["commit"] is None and "x &gt; 15" in res["diff"]
+    assert (ws / "models/train_gate.xml").read_text() == before and len(git_log(ws)) == 1
+
+
+def test_patch_model_syntax_error_writes_nothing(ws: Path) -> None:
+    before = (ws / "models/train_gate.xml").read_text()
+    ops = [{"op": "set_guard", "template": "Train", "edge": 1, "value": "x >= = 15"}]
+    res = call("patch_model", {"model": "train_gate", "operations": ops, "reason": "bad"})
+    assert res["status"] == "syntax_error" and res["commit"] is None
+    assert res["errors"][0]["element"] == "guard of edge Train: Near -> Cross"
+    assert (ws / "models/train_gate.xml").read_text() == before and len(git_log(ws)) == 1
+
+
+def test_patch_model_flags_removed_behaviour(ws: Path) -> None:
+    ops = [{"op": "remove_edge", "template": "Train", "from": "Near", "to": "Cross"}]
+    res = call("patch_model", {"model": "train_gate", "operations": ops, "reason": "hide the bug", "dry_run": True})
+    assert res["removes_behaviour"] is True
+    assert res["behaviour_warnings"] == [
+        {"op_index": 0, "severity": "removes_behaviour", "message": "Removed edge Train: Near -> Cross."}
+    ]
+
+
+def test_patch_model_refuses_dirty_model(ws: Path) -> None:
+    p = ws / "models/train_gate.xml"
+    p.write_text(p.read_text().replace("Level crossing", "Level crossing (edited)"))
+    res = call("patch_model", {"model": "train_gate", "operations": FIX_R2, "reason": "x"})
+    assert res["status"] == "error" and "uncommitted" in res["message"]
+
+
+def test_patch_model_bad_operation_and_reason(ws: Path) -> None:
+    res = call("patch_model", {"model": "train_gate", "operations": [{"op": "nope"}], "reason": "x"})
+    assert res["status"] == "error" and "Unknown op" in res["message"] and "No changes were written" in res["message"]
+    res = call("patch_model", {"model": "train_gate", "operations": FIX_R2, "reason": "  "})
+    assert res["status"] == "error" and "reason" in res["message"]

@@ -120,6 +120,29 @@ class Workspace:
             pass
         return info
 
+    def is_git_repo(self) -> bool:
+        try:
+            return self.git("rev-parse", "--is-inside-work-tree").stdout.strip() == "true"
+        except FileNotFoundError:
+            return False
+
+    def commit_file(self, path: Path, message: str) -> str:
+        """Stage and commit only ``path``; returns the new commit hash. Uses the
+        repository's git identity, falling back to ``uppaal-mcp`` if none is set."""
+        rel = self.rel(path)
+        ident: list[str] = []
+        if not self.git("config", "user.email").stdout.strip():
+            ident = ["-c", "user.name=uppaal-mcp", "-c", "user.email=uppaal-mcp@localhost"]
+        self.git("add", "--", rel, check=True)
+        r = subprocess.run(
+            ["git", "-C", str(self.root), *ident, "commit", "--only", "-q", "-m", message, "--", rel],
+            capture_output=True,
+            text=True,
+        )
+        if r.returncode != 0:
+            raise WorkspaceError(f"git commit failed: {(r.stderr or r.stdout).strip()}")
+        return self.git("rev-parse", "HEAD", check=True).stdout.strip()
+
     # ------------------------------------------------------------------- runs
 
     @staticmethod
