@@ -96,6 +96,7 @@ class QueryResult:
     detail: str = ""
     stats: dict[str, Any] = field(default_factory=dict)
     trace_file: str | None = None
+    requirement: str = ""
 
 
 @dataclass
@@ -175,6 +176,12 @@ def parse_query_file(text: str) -> list[Query]:
             queries.append(Query(index=len(queries) + 1, line=lineno, formula=code, comment=comment))
             pending_comment = []
     return queries
+
+
+def requirement_of(comment: str) -> str:
+    """The requirement text of a query's preceding comment (``REQ:`` prefix removed)."""
+    c = comment.strip()
+    return c[4:].strip() if c.upper().startswith("REQ:") else c
 
 
 def find_smc_queries(queries: list[Query]) -> list[Query]:
@@ -326,6 +333,8 @@ def build_results(
         else:
             detail = f"verifyta produced no result for this query (exit code {returncode})."
         results.append(QueryResult(q.index, q.line, q.formula, Verdict.ERROR, detail))
+    for q, r in zip(queries, results):
+        r.requirement = requirement_of(q.comment)
     return results
 
 

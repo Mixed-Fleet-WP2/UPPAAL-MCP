@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import uuid
 from dataclasses import dataclass
@@ -89,6 +90,18 @@ class Workspace:
         p = self.resolve(name, under=self.queries_dir)
         if not p.is_file():
             raise WorkspaceError(f"Query file not found: {self.rel(p)}")
+        return p
+
+    def writable_query_path(self, name: str) -> Path:
+        """The ONLY way tools obtain a query file path to write. Approved queries in
+        ``queries/`` are read-only; writes are confined to ``queries/proposed/``."""
+        if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]*\.q", name):
+            raise WorkspaceError(
+                f"Invalid proposed query file name {name!r}: use a plain file name like 'train_gate.q' (no directories)."
+            )
+        p = self.resolve(self.proposed_dir / name, under=self.proposed_dir)
+        if p.exists() and not p.is_file():
+            raise WorkspaceError(f"{self.rel(p)} is not a regular file")
         return p
 
     def approved_queries_for(self, model: Path) -> Path:

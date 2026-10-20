@@ -22,6 +22,7 @@ from typing import Any, Literal, TypeVar
 
 import anyio
 from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ResourceError, ResourceNotFoundError
 
 from server import model as mdl
 from server import trace as tr
@@ -196,6 +197,10 @@ async def verify(
         - "maybe": inconclusive (approximate state representation) - treat as UNKNOWN.
         - "timeout": not decided within timeout_s - UNKNOWN, never satisfied.
         - "error": not decided (compile/runtime error, memory limit) - see ``detail``.
+      ``requirement``: the requirement text from the ``/* ... */`` comment above the
+      query in its .q file (``REQ:`` prefix removed), or null.
+      ``exploratory`` is true for query_text runs: such results are sanity checks, not
+      verification of an approved requirement.
       Every run is logged to runs.jsonl and stored under traces/<run_id>/.
     """
     ws = _ws()
@@ -246,6 +251,7 @@ async def verify(
                 "verdict": q.verdict.value,
                 "detail": q.detail,
                 "stats": q.stats,
+                "requirement": q.requirement or None,
                 "has_trace": q.trace_file is not None,
             }
         )
@@ -276,10 +282,12 @@ async def verify(
                 "query_source": query_source,
                 "query_index": q["index"],
                 "query": q["formula"],
+                "requirement": q["requirement"],
                 "options": options,
                 "verdict": q["verdict"],
                 "duration_s": run.duration_s,
                 "run_status": run.status,
+                "exploratory": query_source == "inline",
             }
             for q in queries
         ]
@@ -294,6 +302,12 @@ async def verify(
         "message": run.message,
         "errors": mdl.locate_diagnostics(mpath, run.diagnostics),
         "run_dir": ws.rel(run_dir),
+        "exploratory": query_source == "inline",
+        **(
+            {"note": "Exploratory run (query_text): these results do not verify an approved requirement."}
+            if query_source == "inline"
+            else {}
+        ),
     }
 
 
@@ -565,6 +579,202 @@ async def patch_model(model: str, operations: list[dict[str, Any]], reason: str,
             else "No approved suite exists for this model; verify the relevant queries."
         ),
     }
+
+
+@mcp.tool()
+@safe_tool
+async def propose_query(model: str, requirement: str, formulas: list[str], file: str | None = None) -> dict[str, Any]:
+    """Record a formalized requirement as proposed queries in ``queries/proposed/``.
+
+    You (the agent) translate the natural-language requirement into one or more
+    UPPAAL formulas; this tool type-checks them against the model and appends them,
+    each preceded by ``/* REQ: <requirement> */``, to a proposed query file. Approved
+    queries in ``queries/`` are read-only: only the user approves a query by moving
+    it into ``queries/<model>.q``.
+
+    Args:
+      model: model name or path inside ``models/``.
+      requirement: the requirement in natural language, as stated by the user.
+      formulas: one or more symbolic queries (A[], E<>, A<>, E[], -->), one line
+        each. Use several formulas when the requirement has several parts, e.g. a
+        safety part and a liveness part, and add an ``E<>`` sanity check when an
+        ``A[] (p imply q)`` query could hold vacuously.
+      file: optional file name inside ``queries/proposed/`` (default ``<model>.q``).
+
+    Returns:
+      ``{"status": "ok", "query_file", "entries": [{"formula", "line"}], ...}`` or
+      ``{"status": "errors", "errors": [{"formula_index", "formula", "message"}]}``
+      (nothing written). ``already_approved`` lists formulas that already exist in
+      the approved suite. Next: show the requirement and the formulas to the user and
+      wait for their approval BEFORE calling ``verify(model, query_file=<query_file>)``.
+    """
+    ws = _ws()
+    mpath = ws.model_path(model)
+    if not requirement or not requirement.strip():
+        return _error("'requirement' (natural-language text) is required.")
+    if not isinstance(formulas, list) or not formulas or not all(isinstance(f, str) and f.strip() for f in formulas):
+        return _error("'formulas' must be a non-empty list of query strings.")
+    cleaned = [" ".join(f.split()) for f in formulas]
+    for i, f in enumerate(cleaned):
+        if "/*" in f or "*/" in f or "//" in f:
+            return _error(f"Formula {i} contains a comment; put explanations in 'requirement'.")
+    target = ws.writable_query_path(file or f"{mpath.stem}.q")
+    smc = vt.find_smc_queries(vt.parse_query_file("\n".join(cleaned)))
+    if smc:
+        return _error("Statistical/strategy queries are not supported: " + "; ".join(q.formula for q in smc))
+
+    def check() -> vt.SyntaxCheck:
+        with vt.inline_query_file("\n".join(cleaned)) as qpath:
+            return vt.check_queries(mpath, qpath)
+
+    res = await anyio.to_thread.run_sync(check)
+    if not res.ok:
+        errors = []
+        for d in res.diagnostics:
+            idx = (d.line - 1) if d.source == "query" and d.line else None
+            errors.append(
+                {
+                    "formula_index": idx,
+                    "formula": cleaned[idx] if idx is not None and 0 <= idx < len(cleaned) else None,
+                    "message": d.message,
+                    "source": d.source,
+                }
+            )
+        return {
+            "status": "errors",
+            "errors": errors or [{"message": res.message or "Queries could not be checked."}],
+            "message": "Nothing was written. Fix the formulas (or the model) and try again.",
+        }
+
+    req = " ".join(requirement.replace("*/", "* /").split())
+    approved = ws.approved_queries_for(mpath)
+    approved_formulas = (
+        {" ".join(q.formula.split()) for q in vt.parse_query_file(approved.read_text())} if approved.is_file() else set()
+    )
+    existing = target.read_text(encoding="utf-8") if target.is_file() else ""
+    prefix = "" if not existing or existing.endswith("\n\n") else ("\n" if existing.endswith("\n") else "\n\n")
+    block = []
+    for i, f in enumerate(cleaned):
+        part = f" (part {i + 1}/{len(cleaned)})" if len(cleaned) > 1 else ""
+        block += [f"/* REQ: {req}{part} */", f]
+    start_line = len((existing + prefix).splitlines()) + 1
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("a", encoding="utf-8") as fh:
+        fh.write(prefix + "\n".join(block) + "\n")
+    return {
+        "status": "ok",
+        "query_file": ws.rel(target),
+        "requirement": req,
+        "entries": [{"formula": f, "line": start_line + 2 * i + 1} for i, f in enumerate(cleaned)],
+        "already_approved": [f for f in cleaned if f in approved_formulas],
+        "next_step": (
+            "Show the requirement and formulas to the user and ask them to confirm the formalization. "
+            f"After approval run verify(model={mpath.stem!r}, query_file={ws.rel(target)!r})."
+        ),
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Resources
+# --------------------------------------------------------------------------- #
+
+
+@mcp.resource(
+    "uppaal://queries",
+    name="approved-queries-index",
+    description="Index of approved query files (read-only) with their queries and requirements.",
+    mime_type="application/json",
+)
+def approved_queries_index() -> str:
+    ws = _ws()
+    files = []
+    for p in sorted(ws.queries_dir.glob("*.q")):
+        files.append(
+            {
+                "uri": f"uppaal://queries/{p.stem}",
+                "file": ws.rel(p),
+                "model": p.stem,
+                "queries": [
+                    {"index": q.index, "line": q.line, "formula": q.formula, "requirement": vt.requirement_of(q.comment) or None}
+                    for q in vt.parse_query_file(p.read_text(encoding="utf-8"))
+                ],
+            }
+        )
+    return json.dumps({"approved_query_files": files}, indent=2)
+
+
+@mcp.resource(
+    "uppaal://queries/{name}",
+    name="approved-query-file",
+    description="Content of an approved query file queries/<name>.q (read-only).",
+    mime_type="text/plain",
+)
+def approved_query_file(name: str) -> str:
+    ws = _ws()
+    stem = name.removesuffix(".q")
+    try:
+        p = ws.resolve(f"queries/{stem}.q", under=ws.queries_dir)
+    except WorkspaceError as e:
+        raise ResourceError(str(e)) from None
+    if p.parent != ws.queries_dir.resolve() or not p.is_file():
+        raise ResourceNotFoundError(f"No approved query file queries/{stem}.q; see uppaal://queries")
+    return p.read_text(encoding="utf-8")
+
+
+@mcp.resource(
+    "uppaal://docs/query-language",
+    name="query-language-cheat-sheet",
+    description="UPPAAL query language cheat sheet: A[], E<>, A<>, E[], -->, deadlock, patterns and pitfalls.",
+    mime_type="text/markdown",
+)
+def query_language() -> str:
+    return (Path(__file__).resolve().parent.parent / "docs/query-language.md").read_text(encoding="utf-8")
+
+
+# --------------------------------------------------------------------------- #
+# Prompts
+# --------------------------------------------------------------------------- #
+
+
+@mcp.prompt(
+    name="verify_requirement",
+    description="Formalize a natural-language requirement, verify it with UPPAAL, and diagnose violations.",
+)
+def verify_requirement(requirement: str, model: str = "") -> str:
+    """The agent loop for checking one requirement."""
+    target = f"model `{model}`" if model else "the relevant model (use list_models)"
+    return f"""Check this requirement against {target} with UPPAAL:
+
+> {requirement}
+
+verifyta is the only source of truth. Never state a verdict you did not get from `verify`.
+
+1. **Formalize.** Read `uppaal://docs/query-language` and call `read_model` to learn the
+   process, location and variable names. Translate the requirement into one or more
+   symbolic queries. Add an `E<>` sanity check when an implication could hold vacuously.
+   Call `propose_query(model, requirement, formulas)`. Show the user the requirement,
+   each formula and what it means in plain words, and WAIT for their approval.
+2. **Check, then verify.** `check_syntax` (with the proposed query file), then
+   `verify(model, query_file=<proposed file>)`.
+3. **If violated:** `get_trace(run_id, query_index)`. Explain the scenario step by step in
+   plain language, citing step numbers, locations, variable values and clock constraints.
+4. **Diagnose** and say which it is:
+   - design bug (the system really behaves wrongly),
+   - modeling error (the model does not reflect the real system), or
+   - mis-formalized requirement (the query does not say what the user meant).
+5. **Fix.** For a design bug or modeling error, propose a minimal change with
+   `patch_model(..., dry_run=true)`, show the diff, and apply it after approval. Point out
+   every `behaviour_warnings` entry; a patch with `removes_behaviour: true` may only hide
+   the problem. Then re-run the FULL approved suite: `verify(model)` with no query
+   arguments, plus the proposed queries. Report every verdict.
+   For a mis-formalized requirement, propose a corrected query (step 1) instead.
+6. **Never** weaken, edit or delete approved queries in `queries/` to make them pass.
+7. **On timeout** (or `maybe`/`error`): the result is UNKNOWN, never "satisfied". Try another
+   `search_order` (e.g. "dfs"), a smaller model instance or tighter variable bounds, and
+   explain the trade-off: DFS or random DFS may find a counterexample sooner, but proving
+   the property still requires exploring the whole state space; a smaller instance is
+   faster to check but proves the property only for that instance.
+"""
 
 
 def main() -> None:
