@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<nta><declaration>int g[2] = {0, 0}; bool flag; chan c;</declaration>
+<template><name>P</name><parameter>const int id</parameter><declaration>int n; clock z;</declaration>
+<location id="a"><name>A</name><label kind="invariant">z &lt;= 3</label></location><location id="b"><name>B</name></location><init ref="a"/>
+<transition><source ref="a"/><target ref="b"/><label kind="guard">z &gt;= 2</label><label kind="assignment">n = (n + 1) % 3, g[id] = 5, flag = true</label></transition>
+<transition><source ref="b"/><target ref="a"/><label kind="assignment">z = 0</label></transition></template>
+<system>p0 = P(0); p1 = P(1); system p0, p1;</system></nta>

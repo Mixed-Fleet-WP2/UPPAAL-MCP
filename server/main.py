@@ -22,6 +22,7 @@ import anyio
 from mcp.server.mcpserver import MCPServer
 
 from server import model as mdl
+from server import trace as tr
 from server import verifyta as vt
 from server.workspace import Workspace, WorkspaceError, utc_now
 
@@ -291,6 +292,122 @@ async def verify(
         "message": run.message,
         "errors": mdl.locate_diagnostics(mpath, run.diagnostics),
         "run_dir": ws.rel(run_dir),
+    }
+
+
+@mcp.tool()
+@safe_tool
+async def get_trace(
+    run_id: str,
+    query_index: int | None = None,
+    head: int = 5,
+    tail: int = 5,
+    from_step: int | None = None,
+    to_step: int | None = None,
+) -> dict[str, Any]:
+    """Return the counterexample or witness trace of a query from a verify run.
+
+    Args:
+      run_id: the ``run_id`` returned by ``verify``.
+      query_index: 1-based ``index`` of the query in that run. May be omitted when
+        exactly one query in the run has a trace.
+      head, tail: number of first/last steps in ``summary`` (default 5 each).
+      from_step, to_step: optional inclusive 0-based step range to return in full
+        in ``steps`` (use this to page through long traces).
+
+    Returns:
+      ``{"status": "ok", "run_id", "query": {index, formula, verdict}, "kind":
+      "counterexample" | "witness", "how_to_read", "length", "processes",
+      "loop_back_to_step", "summary": {"first": [...], "last": [...], "omitted_steps"},
+      "steps": [...] | null, "trace_json", "raw_trace"}``.
+
+      ``steps`` contains every step when the trace has at most head + tail steps or a
+      range was requested; otherwise it is null and the full JSON is in ``trace_json``.
+      Each step: ``step`` (0-based), ``via`` (the transition taken to reach it:
+      ``action``, ``edges`` [{process, from, to, guard, sync, update}] and a
+      ``description``; null for step 0), ``locations`` (process -> location),
+      ``variables`` (name -> value; locals as ``process.var``, arrays flattened,
+      booleans as 0/1), ``changed`` (var -> [old, new]), ``clock_constraints``
+      (symbolic zone, e.g. ``"train.x <= 5"``, ``"train.x - gate.y <= -10"``) and
+      ``time`` (global-time interval). Summary steps omit per-clock bounds.
+      ``loop_back_to_step`` (liveness counterexamples): the earlier step that the
+      last step is identical to, or null if the trace does not loop.
+      Cite step numbers when explaining a trace.
+    """
+    ws = _ws()
+    run_dir = ws.run_dir(run_id)
+    meta_path = run_dir / "run.json"
+    if not meta_path.is_file():
+        return _error(f"Unknown run_id {run_id!r}.")
+    meta = json.loads(meta_path.read_text())
+    with_trace = [q for q in meta["queries"] if q.get("trace_file")]
+    if query_index is None:
+        if len(with_trace) != 1:
+            return _error(
+                "query_index is required: queries with traces in this run are "
+                f"{[q['index'] for q in with_trace] or 'none'}."
+            )
+        q = with_trace[0]
+    else:
+        matches = [q for q in meta["queries"] if q["index"] == query_index]
+        if not matches:
+            return _error(f"Run {run_id} has no query with index {query_index}.")
+        q = matches[0]
+        if not q.get("trace_file"):
+            hint = (
+                " Re-run verify with trace_type 'some' or 'shortest'."
+                if meta["options"].get("trace_type") == "none"
+                else " verifyta produces traces only for violated A[]/A<>/--> and satisfied E<>/E[] queries."
+            )
+            return _error(f"Query {query_index} ({q['formula']}, {q['verdict']}) has no trace.{hint}")
+    if head < 0 or tail < 0:
+        return _error("head and tail must be >= 0.")
+
+    raw = ws.resolve(q["trace_file"], under=run_dir)
+    json_path = run_dir / f"trace-q{q['index']}.json"
+
+    def work() -> dict[str, Any]:
+        if json_path.is_file():
+            return json.loads(json_path.read_text())
+        parsed = tr.parse_trace(raw)
+        json_path.write_text(json.dumps(parsed, indent=1))
+        return parsed
+
+    try:
+        parsed = await anyio.to_thread.run_sync(work)
+    except tr.TraceError as e:
+        return _error(str(e))
+    steps = parsed["steps"]
+    n = len(steps)
+    first = steps[:head]
+    last = steps[max(head, n - tail):] if tail else []
+    full: list[dict[str, Any]] | None = None
+    if from_step is not None or to_step is not None:
+        lo = 0 if from_step is None else from_step
+        hi = n - 1 if to_step is None else to_step
+        if not (0 <= lo <= hi < n):
+            return _error(f"Step range must satisfy 0 <= from_step <= to_step < {n}.")
+        full = steps[lo : hi + 1]
+    elif n <= head + tail:
+        full = steps
+    return {
+        "status": "ok",
+        "run_id": run_id,
+        "model": meta["model"],
+        "query": {"index": q["index"], "formula": q["formula"], "verdict": q["verdict"]},
+        "kind": "counterexample" if q["verdict"] == "violated" else "witness",
+        "how_to_read": tr.reading_guide(q["formula"], q["verdict"]),
+        "length": n,
+        "processes": parsed["processes"],
+        "loop_back_to_step": tr.find_loop(steps),
+        "summary": {
+            "first": [tr.compact_step(s) for s in first],
+            "last": [tr.compact_step(s) for s in last],
+            "omitted_steps": max(0, n - len(first) - len(last)),
+        },
+        "steps": full,
+        "trace_json": ws.rel(json_path),
+        "raw_trace": ws.rel(raw),
     }
 
 

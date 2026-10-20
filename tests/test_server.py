@@ -130,3 +130,33 @@ def test_symlink_escape_refused(ws: Path, tmp_path: Path) -> None:
     (ws / "models/link.xml").symlink_to(outside)
     res = call("check_syntax", {"model": "link"})
     assert res["status"] == "error" and "outside" in res["message"]
+
+
+def test_get_trace_counterexample(ws: Path) -> None:
+    run = call("verify", {"model": "train_gate"})
+    res = call("get_trace", {"run_id": run["run_id"]})  # only query 2 has a trace
+    assert res["status"] == "ok" and res["kind"] == "counterexample"
+    assert res["query"] == {"index": 2, "formula": "A[] (train.Cross imply gate.Down)", "verdict": "violated"}
+    assert res["length"] == 3 and len(res["steps"]) == 3
+    assert res["steps"][-1]["locations"] == {"train": "Cross", "gate": "Lowering"}
+    assert (ws / res["trace_json"]).is_file() and (ws / res["raw_trace"]).is_file()
+
+
+def test_get_trace_summary_and_paging(ws: Path) -> None:
+    shutil.copy(FIX / "locals.xml", ws / "models/locals.xml")
+    run = call("verify", {"model": "locals", "query_text": "A<> p0.B and p1.B"})
+    res = call("get_trace", {"run_id": run["run_id"], "query_index": 1, "head": 2, "tail": 2})
+    assert res["steps"] is None and res["length"] > 4
+    assert [s["step"] for s in res["summary"]["first"]] == [0, 1]
+    assert res["summary"]["omitted_steps"] == res["length"] - 4
+    assert res["loop_back_to_step"] is not None
+    page = call("get_trace", {"run_id": run["run_id"], "query_index": 1, "from_step": 3, "to_step": 5})
+    assert [s["step"] for s in page["steps"]] == [3, 4, 5]
+
+
+def test_get_trace_errors(ws: Path) -> None:
+    run = call("verify", {"model": "train_gate"})
+    assert "no trace" in call("get_trace", {"run_id": run["run_id"], "query_index": 1})["message"]
+    assert call("get_trace", {"run_id": "nope"})["status"] == "error"
+    assert call("get_trace", {"run_id": "../.."})["status"] == "error"
+    assert call("get_trace", {"run_id": run["run_id"], "query_index": 2, "from_step": 5})["status"] == "error"
