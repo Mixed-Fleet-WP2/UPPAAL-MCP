@@ -30,7 +30,7 @@ int[0,3] crossings = 0;</declaration>
 		<transition id="id4">
 			<source ref="id1"/>
 			<target ref="id2"/>
-			<label kind="guard" x="210" y="50">x &gt;= 15</label>
+			<label kind="guard" x="210" y="50">x &gt; 15</label>
 			<label kind="assignment" x="210" y="70">x = 0</label>
 		</transition>
 		<transition id="id5">
