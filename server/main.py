@@ -583,20 +583,22 @@ async def patch_model(model: str, operations: list[dict[str, Any]], reason: str,
 
 @mcp.tool()
 @safe_tool
-async def propose_query(model: str, requirement: str, formulas: list[str], file: str | None = None) -> dict[str, Any]:
+async def propose_query(model: str, requirement: str, uppaal_queries: list[str], file: str | None = None) -> dict[str, Any]:
     """Record a formalized requirement as proposed queries in ``queries/proposed/``.
 
-    You (the agent) translate the natural-language requirement into one or more
-    UPPAAL formulas; this tool type-checks them against the model and appends them,
-    each preceded by ``/* REQ: <requirement> */``, to a proposed query file. Approved
-    queries in ``queries/`` are read-only: only the user approves a query by moving
-    it into ``queries/<model>.q``.
+    The user only gives the requirement in natural language. YOU (the agent) write
+    the UPPAAL queries that formalize it - the user never types them. Read the model
+    first (read_model) to use the exact process, location and variable names, and
+    see uppaal://docs/query-language. This tool type-checks your queries against the
+    model and appends them, each preceded by ``/* REQ: <requirement> */``, to a
+    proposed query file. Approved queries in ``queries/`` are read-only: only the user
+    approves a query by moving it into ``queries/<model>.q``.
 
     Args:
       model: model name or path inside ``models/``.
       requirement: the requirement in natural language, as stated by the user.
-      formulas: one or more symbolic queries (A[], E<>, A<>, E[], -->), one line
-        each. Use several formulas when the requirement has several parts, e.g. a
+      uppaal_queries: your formalization: one or more symbolic queries (A[], E<>, A<>,
+        E[], -->), one line each. Use several when the requirement has several parts, e.g. a
         safety part and a liveness part, and add an ``E<>`` sanity check when an
         ``A[] (p imply q)`` query could hold vacuously.
       file: optional file name inside ``queries/proposed/`` (default ``<model>.q``).
@@ -604,17 +606,25 @@ async def propose_query(model: str, requirement: str, formulas: list[str], file:
     Returns:
       ``{"status": "ok", "query_file", "entries": [{"formula", "line"}], ...}`` or
       ``{"status": "errors", "errors": [{"formula_index", "formula", "message"}]}``
-      (nothing written). ``already_approved`` lists formulas that already exist in
-      the approved suite. Next: show the requirement and the formulas to the user and
-      wait for their approval BEFORE calling ``verify(model, query_file=<query_file>)``.
+      (nothing written). ``already_approved`` lists queries that already exist in
+      the approved suite. Next: show the requirement and your queries to the user,
+      explain in plain words what each one checks, and wait for their approval
+      BEFORE calling ``verify(model, query_file=<query_file>)``.
     """
     ws = _ws()
     mpath = ws.model_path(model)
     if not requirement or not requirement.strip():
         return _error("'requirement' (natural-language text) is required.")
-    if not isinstance(formulas, list) or not formulas or not all(isinstance(f, str) and f.strip() for f in formulas):
-        return _error("'formulas' must be a non-empty list of query strings.")
-    cleaned = [" ".join(f.split()) for f in formulas]
+    if (
+        not isinstance(uppaal_queries, list)
+        or not uppaal_queries
+        or not all(isinstance(f, str) and f.strip() for f in uppaal_queries)
+    ):
+        return _error(
+            "'uppaal_queries' must be a non-empty list of query strings that you (the agent) write "
+            "to formalize the requirement."
+        )
+    cleaned = [" ".join(f.split()) for f in uppaal_queries]
     for i, f in enumerate(cleaned):
         if "/*" in f or "*/" in f or "//" in f:
             return _error(f"Formula {i} contains a comment; put explanations in 'requirement'.")
@@ -752,7 +762,7 @@ verifyta is the only source of truth. Never state a verdict you did not get from
 1. **Formalize.** Read `uppaal://docs/query-language` and call `read_model` to learn the
    process, location and variable names. Translate the requirement into one or more
    symbolic queries. Add an `E<>` sanity check when an implication could hold vacuously.
-   Call `propose_query(model, requirement, formulas)`. Show the user the requirement,
+   Call `propose_query(model, requirement, uppaal_queries)`. Show the user the requirement,
    each formula and what it means in plain words, and WAIT for their approval.
 2. **Check, then verify.** `check_syntax` (with the proposed query file), then
    `verify(model, query_file=<proposed file>)`.

@@ -39,7 +39,7 @@ def test_writable_query_path_rejects_symlink_to_approved(ws: Path) -> None:
 
 def test_propose_query_writes_only_to_proposed(ws: Path) -> None:
     before = digest(ws)
-    res = call("propose_query", {"model": "train_gate", "requirement": REQ, "formulas": ["A[] (train.Cross imply gate.Down)", "E<> train.Cross"]})
+    res = call("propose_query", {"model": "train_gate", "requirement": REQ, "uppaal_queries": ["A[] (train.Cross imply gate.Down)", "E<> train.Cross"]})
     assert res["status"] == "ok" and res["query_file"] == "queries/proposed/train_gate.q"
     assert res["already_approved"] == ["A[] (train.Cross imply gate.Down)"]
     text = (ws / res["query_file"]).read_text()
@@ -49,7 +49,7 @@ def test_propose_query_writes_only_to_proposed(ws: Path) -> None:
     assert digest(ws) == before
 
     # Appending keeps earlier entries and line numbers stay right.
-    res2 = call("propose_query", {"model": "train_gate", "requirement": "gate can open", "formulas": ["E<> gate.Up"]})
+    res2 = call("propose_query", {"model": "train_gate", "requirement": "gate can open", "uppaal_queries": ["E<> gate.Up"]})
     lines = (ws / res2["query_file"]).read_text().splitlines()
     assert lines[res2["entries"][0]["line"] - 1] == "E<> gate.Up"
 
@@ -60,7 +60,7 @@ def test_propose_query_writes_only_to_proposed(ws: Path) -> None:
 
 
 def test_propose_query_type_errors_write_nothing(ws: Path) -> None:
-    res = call("propose_query", {"model": "train_gate", "requirement": "x", "formulas": ["E<> train.Cross", "A[] train.Nowhere"]})
+    res = call("propose_query", {"model": "train_gate", "requirement": "x", "uppaal_queries": ["E<> train.Cross", "A[] train.Nowhere"]})
     assert res["status"] == "errors" and res["errors"][0]["formula_index"] == 1
     assert not (ws / "queries/proposed/train_gate.q").exists()
 
@@ -70,14 +70,14 @@ def test_propose_query_type_errors_write_nothing(ws: Path) -> None:
     [
         ({"file": "../train_gate.q"}, "Invalid proposed query file name"),
         ({"file": "train_gate.txt"}, "Invalid proposed query file name"),
-        ({"formulas": ["Pr[<=10](<> train.Cross)"]}, "not supported"),
-        ({"formulas": ["E<> train.Cross /* hi */"]}, "comment"),
-        ({"formulas": []}, "non-empty"),
+        ({"uppaal_queries": ["Pr[<=10](<> train.Cross)"]}, "not supported"),
+        ({"uppaal_queries": ["E<> train.Cross /* hi */"]}, "comment"),
+        ({"uppaal_queries": []}, "non-empty"),
         ({"requirement": " "}, "requirement"),
     ],
 )
 def test_propose_query_refusals(ws: Path, args: dict[str, Any], msg: str) -> None:
-    base = {"model": "train_gate", "requirement": REQ, "formulas": ["E<> train.Cross"]}
+    base = {"model": "train_gate", "requirement": REQ, "uppaal_queries": ["E<> train.Cross"]}
     res = call("propose_query", {**base, **args})
     assert res["status"] == "error" and msg in res["message"]
 
@@ -85,8 +85,8 @@ def test_propose_query_refusals(ws: Path, args: dict[str, Any], msg: str) -> Non
 def test_no_tool_modifies_approved_queries(ws: Path) -> None:
     before = digest(ws)
     attempts: list[tuple[str, dict[str, Any]]] = [
-        ("propose_query", {"model": "train_gate", "requirement": "r", "formulas": ["E<> train.Cross"], "file": "../train_gate.q"}),
-        ("propose_query", {"model": "train_gate", "requirement": "r", "formulas": ["E<> train.Cross"], "file": "/home/x.q"}),
+        ("propose_query", {"model": "train_gate", "requirement": "r", "uppaal_queries": ["E<> train.Cross"], "file": "../train_gate.q"}),
+        ("propose_query", {"model": "train_gate", "requirement": "r", "uppaal_queries": ["E<> train.Cross"], "file": "/home/x.q"}),
         ("patch_model", {"model": "../queries/train_gate.q", "operations": [{"op": "set_declaration", "text": ""}], "reason": "x"}),
         ("patch_model", {"model": "queries/train_gate", "operations": [{"op": "set_declaration", "text": ""}], "reason": "x"}),
         ("verify", {"model": "train_gate", "query_file": "train_gate.q"}),
