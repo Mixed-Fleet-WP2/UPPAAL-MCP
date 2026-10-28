@@ -13,7 +13,7 @@ import pytest
 from mcp import Client
 
 from server.main import mcp
-from tests.test_verifyta import FIX, ROOT, live
+from tests.test_verifyta import FIX, live
 
 pytestmark = live
 
@@ -22,10 +22,12 @@ pytestmark = live
 def ws(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """An isolated, git-initialised copy of the workspace."""
     root = tmp_path / "ws"
-    (root / "queries/proposed").mkdir(parents=True)
+    (root / "queries/candidates").mkdir(parents=True)
     (root / "traces").mkdir()
-    shutil.copytree(ROOT / "models", root / "models")
-    shutil.copy(ROOT / "queries/train_gate.q", root / "queries/train_gate.q")
+    (root / "models").mkdir()
+    # Frozen fixtures, so the tests do not depend on the live (possibly fixed) model.
+    shutil.copy(FIX / "train_gate.xml", root / "models/train_gate.xml")
+    shutil.copy(FIX / "train_gate.q", root / "queries/train_gate.q")
     shutil.copy(FIX / "syntax_error.xml", root / "models/broken.xml")
     shutil.copy(FIX / "stress.xml", root / "models/stress.xml")
     shutil.copy(FIX / "stress.q", root / "queries/stress.q")
@@ -60,7 +62,7 @@ def test_list_models(ws: Path) -> None:
     by_name = {m["model"]: m for m in res["models"]}
     tg = by_name["train_gate"]
     assert tg["templates"] == ["Train", "Gate"]
-    assert tg["approved_queries"] == "queries/train_gate.q" and tg["approved_query_count"] == 2
+    assert tg["confirmed_queries"] == "queries/train_gate.q" and tg["confirmed_query_count"] == 2
     assert tg["git"]["commit"] and tg["git"]["dirty"] is False
 
 
@@ -84,7 +86,7 @@ def test_check_syntax_query_errors(ws: Path) -> None:
     assert res["errors"][0]["query_file_line"] == 2
 
 
-def test_verify_approved_suite_and_log(ws: Path) -> None:
+def test_verify_confirmed_requirements_and_log(ws: Path) -> None:
     res = call("verify", {"model": "train_gate"})
     assert res["status"] == "ok"
     assert [q["verdict"] for q in res["queries"]] == ["satisfied", "violated"]

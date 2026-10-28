@@ -9,9 +9,10 @@ import pytest
 
 from server import model as mdl
 from server import verifyta as vt
-from tests.test_verifyta import FIX, ROOT, VERIFYTA, live
+from tests.test_verifyta import FIX, VERIFYTA, live
 
-TRAIN_GATE = ROOT / "models/train_gate.xml"
+# Frozen copy of the train-gate model with its deliberate bug (guard x >= 10).
+TRAIN_GATE = FIX / "train_gate.xml"
 DEMOS = sorted(glob.glob(str(Path(VERIFYTA).parent.parent / "demo/**/*.xml"), recursive=True))
 
 

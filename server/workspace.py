@@ -35,8 +35,8 @@ class Workspace:
         return self.root / "queries"
 
     @property
-    def proposed_dir(self) -> Path:
-        return self.queries_dir / "proposed"
+    def candidates_dir(self) -> Path:
+        return self.queries_dir / "candidates"
 
     @property
     def traces_dir(self) -> Path:
@@ -81,7 +81,7 @@ class Workspace:
         return p
 
     def query_path(self, query_file: str) -> Path:
-        """Resolve a ``.q`` file under ``queries/`` (approved or proposed)."""
+        """Resolve a ``.q`` file under ``queries/`` (confirmed or candidate requirements)."""
         name = query_file.strip()
         if "/" not in name:
             name = f"queries/{name}"
@@ -93,24 +93,20 @@ class Workspace:
         return p
 
     def writable_query_path(self, name: str) -> Path:
-        """The ONLY way tools obtain a query file path to write. Approved queries in
-        ``queries/`` are read-only; writes are confined to ``queries/proposed/``."""
+        """The ONLY way tools obtain a query file path to write. Confirmed requirements
+        in ``queries/`` are read-only; writes are confined to ``queries/candidates/``."""
         if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]*\.q", name):
             raise WorkspaceError(
-                f"Invalid proposed query file name {name!r}: use a plain file name like 'train_gate.q' (no directories)."
+                f"Invalid candidate query file name {name!r}: use a plain file name like 'train_gate.q' (no directories)."
             )
-        p = self.resolve(self.proposed_dir / name, under=self.proposed_dir)
+        p = self.resolve(self.candidates_dir / name, under=self.candidates_dir)
         if p.exists() and not p.is_file():
             raise WorkspaceError(f"{self.rel(p)} is not a regular file")
         return p
 
-    def approved_queries_for(self, model: Path) -> Path:
-        """The approved suite for ``models/<stem>.xml`` is ``queries/<stem>.q``."""
+    def confirmed_queries_for(self, model: Path) -> Path:
+        """The confirmed requirements for ``models/<stem>.xml`` are ``queries/<stem>.q``."""
         return self.queries_dir / f"{model.stem}.q"
-
-    def is_approved_query_file(self, path: Path) -> bool:
-        p = path.resolve()
-        return p.is_relative_to(self.queries_dir.resolve()) and not p.is_relative_to(self.proposed_dir.resolve())
 
     # ------------------------------------------------------------------- git
 

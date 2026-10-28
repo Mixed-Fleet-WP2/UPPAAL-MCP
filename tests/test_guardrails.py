@@ -1,4 +1,4 @@
-"""Phase 5 guardrails: approved queries are read-only, resources and prompts."""
+"""Phase 5 guardrails: confirmed requirements are read-only, resources and prompts."""
 
 from __future__ import annotations
 
@@ -31,17 +31,17 @@ def test_writable_query_path_rejects(ws: Path, name: str) -> None:
         Workspace(ws).writable_query_path(name)
 
 
-def test_writable_query_path_rejects_symlink_to_approved(ws: Path) -> None:
-    (ws / "queries/proposed/evil.q").symlink_to(ws / "queries/train_gate.q")
+def test_writable_query_path_rejects_symlink_to_confirmed(ws: Path) -> None:
+    (ws / "queries/candidates/evil.q").symlink_to(ws / "queries/train_gate.q")
     with pytest.raises(WorkspaceError, match="outside"):
         Workspace(ws).writable_query_path("evil.q")
 
 
-def test_propose_query_writes_only_to_proposed(ws: Path) -> None:
+def test_propose_query_writes_only_to_candidates(ws: Path) -> None:
     before = digest(ws)
     res = call("propose_query", {"model": "train_gate", "requirement": REQ, "uppaal_queries": ["A[] (train.Cross imply gate.Down)", "E<> train.Cross"]})
-    assert res["status"] == "ok" and res["query_file"] == "queries/proposed/train_gate.q"
-    assert res["already_approved"] == ["A[] (train.Cross imply gate.Down)"]
+    assert res["status"] == "ok" and res["query_file"] == "queries/candidates/train_gate.q"
+    assert res["already_confirmed"] == ["A[] (train.Cross imply gate.Down)"]
     text = (ws / res["query_file"]).read_text()
     assert f"/* REQ: {REQ} (part 1/2) */\nA[] (train.Cross imply gate.Down)\n" in text
     lines = text.splitlines()
@@ -62,14 +62,14 @@ def test_propose_query_writes_only_to_proposed(ws: Path) -> None:
 def test_propose_query_type_errors_write_nothing(ws: Path) -> None:
     res = call("propose_query", {"model": "train_gate", "requirement": "x", "uppaal_queries": ["E<> train.Cross", "A[] train.Nowhere"]})
     assert res["status"] == "errors" and res["errors"][0]["formula_index"] == 1
-    assert not (ws / "queries/proposed/train_gate.q").exists()
+    assert not (ws / "queries/candidates/train_gate.q").exists()
 
 
 @pytest.mark.parametrize(
     "args, msg",
     [
-        ({"file": "../train_gate.q"}, "Invalid proposed query file name"),
-        ({"file": "train_gate.txt"}, "Invalid proposed query file name"),
+        ({"file": "../train_gate.q"}, "Invalid candidate query file name"),
+        ({"file": "train_gate.txt"}, "Invalid candidate query file name"),
         ({"uppaal_queries": ["Pr[<=10](<> train.Cross)"]}, "not supported"),
         ({"uppaal_queries": ["E<> train.Cross /* hi */"]}, "comment"),
         ({"uppaal_queries": []}, "non-empty"),
@@ -82,7 +82,7 @@ def test_propose_query_refusals(ws: Path, args: dict[str, Any], msg: str) -> Non
     assert res["status"] == "error" and msg in res["message"]
 
 
-def test_no_tool_modifies_approved_queries(ws: Path) -> None:
+def test_no_tool_modifies_confirmed_requirements(ws: Path) -> None:
     before = digest(ws)
     attempts: list[tuple[str, dict[str, Any]]] = [
         ("propose_query", {"model": "train_gate", "requirement": "r", "uppaal_queries": ["E<> train.Cross"], "file": "../train_gate.q"}),
@@ -100,7 +100,7 @@ def test_no_tool_modifies_approved_queries(ws: Path) -> None:
 
 def test_verify_query_text_is_exploratory(ws: Path) -> None:
     res = call("verify", {"model": "train_gate", "query_text": "E<> train.Cross"})
-    assert res["exploratory"] is True and "do not verify an approved requirement" in res["note"]
+    assert res["exploratory"] is True and "do not verify a confirmed requirement" in res["note"]
     res = call("verify", {"model": "train_gate"})
     assert res["exploratory"] is False and res["queries"][0]["requirement"] == "R1: the system never deadlocks."
 
@@ -110,21 +110,21 @@ def test_resources(ws: Path) -> None:
         async with Client(mcp) as c:
             static = {str(r.uri) for r in (await c.list_resources()).resources}
             templates = {t.uri_template for t in (await c.list_resource_templates()).resource_templates}
-            index = (await c.read_resource("uppaal://queries")).contents[0].text
-            qfile = (await c.read_resource("uppaal://queries/train_gate")).contents[0].text
+            index = (await c.read_resource("uppaal://requirements")).contents[0].text
+            qfile = (await c.read_resource("uppaal://requirements/train_gate")).contents[0].text
             sheet = (await c.read_resource("uppaal://docs/query-language")).contents[0].text
             return {"static": static, "templates": templates, "index": index, "qfile": qfile, "sheet": sheet}
 
     r = anyio.run(go)
-    assert {"uppaal://queries", "uppaal://docs/query-language"} <= r["static"]
-    assert "uppaal://queries/{name}" in r["templates"]
+    assert {"uppaal://requirements", "uppaal://docs/query-language"} <= r["static"]
+    assert "uppaal://requirements/{name}" in r["templates"]
     assert '"formula": "A[] (train.Cross imply gate.Down)"' in r["index"]
     assert r["qfile"] == (ws / "queries/train_gate.q").read_text()
     for op in ("A[]", "E<>", "A<>", "E[]", "-->", "deadlock"):
         assert op in r["sheet"]
 
 
-@pytest.mark.parametrize("uri", ["uppaal://queries/nonexistent", "uppaal://queries/proposed%2Ftrain_gate"])
+@pytest.mark.parametrize("uri", ["uppaal://requirements/nonexistent", "uppaal://requirements/candidates%2Ftrain_gate"])
 def test_resource_errors(ws: Path, uri: str) -> None:
     async def go() -> str:
         async with Client(mcp) as c:
@@ -134,7 +134,7 @@ def test_resource_errors(ws: Path, uri: str) -> None:
                 return str(e)
         return "no error"
 
-    assert "No approved query file" in anyio.run(go)
+    assert "No confirmed requirements file" in anyio.run(go)
 
 
 def test_prompt(ws: Path) -> None:
@@ -146,4 +146,4 @@ def test_prompt(ws: Path) -> None:
 
     names, text = anyio.run(go)
     assert "verify_requirement" in names
-    assert REQ in text and "propose_query" in text and "FULL approved suite" in text and "UNKNOWN" in text
+    assert REQ in text and "propose_query" in text and "ALL confirmed requirements" in text and "UNKNOWN" in text

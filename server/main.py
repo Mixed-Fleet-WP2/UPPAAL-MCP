@@ -33,7 +33,8 @@ INSTRUCTIONS = """\
 Model checking with UPPAAL. verifyta is the source of truth: report verdicts exactly
 as returned (satisfied | violated | maybe | timeout | error). Never claim a property
 holds unless its verdict is "satisfied". "timeout", "maybe" and "error" mean UNKNOWN.
-Queries in queries/ are approved and read-only; propose new ones in queries/proposed/.
+Confirmed requirements in queries/ are read-only; propose candidate requirements in
+queries/candidates/ (only the user confirms them).
 """
 
 mcp = MCPServer(name="uppaal", instructions=INSTRUCTIONS)
@@ -82,14 +83,17 @@ def safe_tool(fn: Callable[..., Awaitable[dict[str, Any]]]) -> Callable[..., Awa
 async def list_models() -> dict[str, Any]:
     """List the UPPAAL models in the workspace.
 
-    Returns ``{"status": "ok", "models": [...]}``; each entry has:
-      - ``model``: name to pass to other tools (e.g. ``"train_gate"``)
-      - ``path``: workspace-relative path (``models/<name>.xml``)
-      - ``templates``: template names, or ``parse_error`` if the XML is malformed
-      - ``approved_queries``: path of the approved suite ``queries/<name>.q`` or null
-      - ``approved_query_count``: number of queries in that suite
-      - ``proposed_queries``: files in ``queries/proposed/`` whose name starts with the model name
-      - ``git``: ``{commit, blob, dirty}`` for the model file
+    Returns:
+        status: "ok"
+        models: one entry per model, with
+            model                 name to pass to the other tools, e.g. "train_gate"
+            path                  "models/<name>.xml"
+            templates             template names (or `parse_error` if the XML is malformed)
+            confirmed_queries      "queries/<name>.q", or null if there are no confirmed requirements
+            confirmed_query_count  number of confirmed requirement queries
+            candidate_queries      candidate files in queries/candidates/ for this model
+            git                   {commit, blob, dirty}: last commit touching the file,
+                                  hash of its current content, uncommitted changes?
     """
     ws = _ws()
     models = []
@@ -99,11 +103,11 @@ async def list_models() -> dict[str, Any]:
             entry["templates"] = [t.findtext("name") for t in mdl.load(p).getroot().iterfind("template")]
         except Exception as e:  # noqa: BLE001
             entry["parse_error"] = str(e)
-        q = ws.approved_queries_for(p)
-        entry["approved_queries"] = ws.rel(q) if q.is_file() else None
-        entry["approved_query_count"] = len(vt.parse_query_file(q.read_text())) if q.is_file() else 0
-        entry["proposed_queries"] = (
-            [ws.rel(f) for f in sorted(ws.proposed_dir.glob(f"{p.stem}*.q"))] if ws.proposed_dir.is_dir() else []
+        q = ws.confirmed_queries_for(p)
+        entry["confirmed_queries"] = ws.rel(q) if q.is_file() else None
+        entry["confirmed_query_count"] = len(vt.parse_query_file(q.read_text())) if q.is_file() else 0
+        entry["candidate_queries"] = (
+            [ws.rel(f) for f in sorted(ws.candidates_dir.glob(f"{p.stem}*.q"))] if ws.candidates_dir.is_dir() else []
         )
         entry["git"] = ws.git_info(p)
         models.append(entry)
@@ -113,24 +117,26 @@ async def list_models() -> dict[str, Any]:
 @mcp.tool()
 @safe_tool
 async def check_syntax(model: str, query_file: str | None = None, query_text: str | None = None) -> dict[str, Any]:
-    """Check a model (and optionally queries) for syntax and type errors WITHOUT verifying.
+    """Check a model, and optionally queries, for syntax and type errors WITHOUT verifying.
 
     Args:
-      model: model name or path inside ``models/`` (``"train_gate"``, ``"train_gate.xml"``
-        or ``"models/train_gate.xml"``).
-      query_file: optional ``.q`` file inside ``queries/`` (e.g. ``"train_gate.q"`` or
-        ``"queries/proposed/r3.q"``) to type-check against the model.
-      query_text: optional query text (one query per line) to type-check instead.
+        model:       model name or path inside models/
+                     ("train_gate", "train_gate.xml" or "models/train_gate.xml")
+        query_file:  optional .q file inside queries/ to type-check against the model
+                     (e.g. "train_gate.q" or "queries/candidates/train_gate.q")
+        query_text:  optional queries to type-check instead, one per line
 
     Returns:
-      ``{"status": "ok" | "errors" | "error", "model_ok": bool, "queries_ok": bool | null,
-      "errors": [...]}``. Each error has ``message``, ``source`` ("model" or "query") and
-      either ``file_line`` (line in the model file), ``element`` (e.g. "guard of edge
-      Train: Near -> Cross"), ``text`` (the offending line) and ``xpath``, or
-      ``query_file_line`` (1-based line in the query text/file). ``queries_ok`` is
-      null when no queries were given or the model itself failed to compile.
-      Runtime errors such as integer overflow are NOT detected here; ``verify``
-      reports them as verdict "error".
+        status:      "ok" | "errors" | "error"
+        model_ok:    true if the model compiles
+        queries_ok:  true/false, or null if no queries were given or the model failed
+        errors:      list of errors, each with `message` and `source`:
+                       source "model": file_line, element (e.g. "guard of edge
+                                       Train: Near -> Cross"), text, xpath
+                       source "query": query_file_line (1-based)
+
+    Note: run-time errors such as integer overflow are not detected here;
+    verify reports them as verdict "error".
     """
     ws = _ws()
     mpath = ws.model_path(model)
@@ -175,42 +181,47 @@ async def verify(
 ) -> dict[str, Any]:
     """Run verifyta on a model and return one verdict per query.
 
+    Which queries are run (give at most one of query_file / query_text):
+        query_file:  a .q file in queries/ (confirmed) or queries/candidates/ (candidates)
+        query_text:  ad-hoc queries, one per line; results are marked exploratory
+        neither:     ALL confirmed requirements of the model, queries/<model>.q
+
     Args:
-      model: model name or path inside ``models/``.
-      query_file: ``.q`` file inside ``queries/`` (approved) or ``queries/proposed/``.
-      query_text: inline queries, one per line (symbolic only: A[], E<>, A<>, E[], -->).
-        If neither query_file nor query_text is given, the model's full approved suite
-        ``queries/<model>.q`` is run.
-      trace_type: "some" (default), "shortest", "fastest" or "none". A trace is a
-        counterexample for a violated A[]/A<> query or a witness for a satisfied E<>/E[] query.
-      search_order: "bfs" (default), "dfs", "random_dfs"; "optimal" and "random_optimal"
-        require trace_type "shortest" or "fastest".
-      timeout_s: wall-clock limit for the whole run, 0 < timeout_s <= 600 (default 60).
+        model:         model name or path inside models/
+        trace_type:    "some" (default) | "shortest" | "fastest" | "none"
+                       A trace is a counterexample for a violated A[] / A<> / --> query,
+                       or a witness for a satisfied E<> / E[] query.
+        search_order:  "bfs" (default) | "dfs" | "random_dfs" | "optimal" | "random_optimal"
+                       ("optimal" and "random_optimal" need trace_type "shortest" or "fastest")
+        timeout_s:     wall-clock limit for the whole run, 0 < timeout_s <= 600 (default 60)
 
     Returns:
-      ``{"status", "run_id", "queries": [...], "duration_s", "message", "errors"}``.
-      ``status``: "ok" (every query got a verdict), "timeout", "compile_error" or "error".
-      Each query: ``index``, ``line``, ``formula``, ``verdict``, ``detail``, ``stats``,
-      ``has_trace``. Verdicts:
-        - "satisfied": verifyta proved the property.
-        - "violated": verifyta disproved it; use get_trace(run_id, index) for the counterexample.
-        - "maybe": inconclusive (approximate state representation) - treat as UNKNOWN.
-        - "timeout": not decided within timeout_s - UNKNOWN, never satisfied.
-        - "error": not decided (compile/runtime error, memory limit) - see ``detail``.
-      ``requirement``: the requirement text from the ``/* ... */`` comment above the
-      query in its .q file (``REQ:`` prefix removed), or null.
-      ``exploratory`` is true for query_text runs: such results are sanity checks, not
-      verification of an approved requirement.
-      Every run is logged to runs.jsonl and stored under traces/<run_id>/.
+        status:        "ok" (every query got a verdict) | "timeout" | "compile_error" | "error"
+        run_id:        pass to get_trace
+        queries:       one entry per query:
+                         index, line, formula, verdict, detail, stats, has_trace,
+                         requirement (text of the /* REQ: ... */ comment above it, or null)
+        exploratory:   true for query_text runs: sanity checks, NOT verification
+                       of a confirmed requirement
+        duration_s, message, errors, model, query_source, run_dir
+
+    Verdicts (report them exactly; only "satisfied" means the property holds):
+        satisfied   verifyta proved the property
+        violated    verifyta disproved it; call get_trace(run_id, index)
+        maybe       inconclusive (approximate state representation): UNKNOWN
+        timeout     not decided within timeout_s: UNKNOWN, never satisfied
+        error       not decided (compile/run-time error, memory limit): see `detail`
+
+    Every run is logged to runs.jsonl and stored under traces/<run_id>/.
     """
     ws = _ws()
     mpath = ws.model_path(model)
     if query_file is not None and query_text is not None:
         return _error("Provide at most one of query_file or query_text.")
     if query_file is None and query_text is None:
-        qpath: Path | None = ws.approved_queries_for(mpath)
+        qpath: Path | None = ws.confirmed_queries_for(mpath)
         if not qpath.is_file():
-            return _error(f"No approved query suite {ws.rel(qpath)}; pass query_file or query_text.")
+            return _error(f"No confirmed requirements file {ws.rel(qpath)}; pass query_file or query_text.")
         query_source = ws.rel(qpath)
     elif query_file is not None:
         qpath = ws.query_path(query_file)
@@ -304,7 +315,7 @@ async def verify(
         "run_dir": ws.rel(run_dir),
         "exploratory": query_source == "inline",
         **(
-            {"note": "Exploratory run (query_text): these results do not verify an approved requirement."}
+            {"note": "Exploratory run (query_text): these results do not verify a confirmed requirement."}
             if query_source == "inline"
             else {}
         ),
@@ -321,34 +332,41 @@ async def get_trace(
     from_step: int | None = None,
     to_step: int | None = None,
 ) -> dict[str, Any]:
-    """Return the counterexample or witness trace of a query from a verify run.
+    """Return the counterexample or witness trace of one query from a verify run.
 
     Args:
-      run_id: the ``run_id`` returned by ``verify``.
-      query_index: 1-based ``index`` of the query in that run. May be omitted when
-        exactly one query in the run has a trace.
-      head, tail: number of first/last steps in ``summary`` (default 5 each).
-      from_step, to_step: optional inclusive 0-based step range to return in full
-        in ``steps`` (use this to page through long traces).
+        run_id:       the run_id returned by verify
+        query_index:  1-based index of the query in that run
+                      (may be omitted if exactly one query in the run has a trace)
+        head, tail:   number of first / last steps in `summary` (default 5 each)
+        from_step,    optional inclusive 0-based step range to return in full in
+        to_step:      `steps`; use it to page through long traces
 
     Returns:
-      ``{"status": "ok", "run_id", "query": {index, formula, verdict}, "kind":
-      "counterexample" | "witness", "how_to_read", "length", "processes",
-      "loop_back_to_step", "summary": {"first": [...], "last": [...], "omitted_steps"},
-      "steps": [...] | null, "trace_json", "raw_trace"}``.
+        status:             "ok"
+        query:              {index, formula, verdict}
+        kind:               "counterexample" | "witness"
+        how_to_read:        how to interpret this kind of trace
+        length:             number of steps
+        processes:          process names
+        loop_back_to_step:  for liveness counterexamples, the earlier step the last
+                            step is identical to (null if the trace does not loop)
+        summary:            {first: [...], last: [...], omitted_steps}
+        steps:              all steps if length <= head + tail or a range was given,
+                            otherwise null (the full trace is in `trace_json`)
+        trace_json, raw_trace, run_id, model
 
-      ``steps`` contains every step when the trace has at most head + tail steps or a
-      range was requested; otherwise it is null and the full JSON is in ``trace_json``.
-      Each step: ``step`` (0-based), ``via`` (the transition taken to reach it:
-      ``action``, ``edges`` [{process, from, to, guard, sync, update}] and a
-      ``description``; null for step 0), ``locations`` (process -> location),
-      ``variables`` (name -> value; locals as ``process.var``, arrays flattened,
-      booleans as 0/1), ``changed`` (var -> [old, new]), ``clock_constraints``
-      (symbolic zone, e.g. ``"train.x <= 5"``, ``"train.x - gate.y <= -10"``) and
-      ``time`` (global-time interval). Summary steps omit per-clock bounds.
-      ``loop_back_to_step`` (liveness counterexamples): the earlier step that the
-      last step is identical to, or null if the trace does not loop.
-      Cite step numbers when explaining a trace.
+    Each step:
+        step               0-based number; cite it when explaining the trace
+        via                transition taken to reach this step (null for step 0):
+                           action, description, edges [{process, from, to, guard, sync, update}]
+        locations          process -> location
+        variables          name -> value (locals as "process.var", arrays flattened,
+                           booleans as 0/1)
+        changed            variable -> [old, new]
+        clock_constraints  symbolic zone, e.g. "train.x <= 5", "train.x - gate.y <= -10"
+        time               global-time interval
+        (summary steps leave out the per-clock bounds)
     """
     ws = _ws()
     run_dir = ws.run_dir(run_id)
@@ -433,19 +451,22 @@ async def read_model(model: str) -> dict[str, Any]:
     """Return the structure of a model as JSON.
 
     Args:
-      model: model name or path inside ``models/``.
+        model:  model name or path inside models/
 
     Returns:
-      ``{"status": "ok", "model", "git", "global_declarations", "templates": [...],
-      "system", "embedded_queries"}``. Each template has ``name``, ``parameters``,
-      ``declarations`` (local declarations text), ``locations`` and ``edges``.
-        - location: ``id``, ``name``, ``invariant`` (null if none), ``urgent``,
-          ``committed``, ``initial``, ``file_line``.
-        - edge: ``index`` (0-based within the template; use it as ``"edge"`` in
-          patch_model), ``id``, ``source``, ``target`` (location names), ``select``,
-          ``guard``, ``sync``, ``update`` (null if absent), ``file_line``.
-      ``embedded_queries`` are queries saved inside the .xml; they are NOT the
-      approved suite (that is ``queries/<model>.q``).
+        status:               "ok"
+        model, git
+        global_declarations:  text of the global declarations
+        system:               text of the system declaration
+        templates:            one entry per template, with
+            name, parameters, declarations (local declarations text)
+            locations:  id, name, invariant (null if none), urgent, committed,
+                        initial, file_line
+            edges:      index (0-based within the template; pass it as "edge" to
+                        patch_model), id, source, target (location names),
+                        select, guard, sync, update (null if absent), file_line
+        embedded_queries:     queries stored inside the .xml file; these are NOT the
+                              confirmed requirements (those are in queries/<model>.q)
     """
     ws = _ws()
     mpath = ws.model_path(model)
@@ -458,45 +479,56 @@ async def read_model(model: str) -> dict[str, Any]:
 async def patch_model(model: str, operations: list[dict[str, Any]], reason: str, dry_run: bool = False) -> dict[str, Any]:
     """Apply targeted edits to a model, syntax-check the result, and git-commit it.
 
-    All operations are applied in order to the current file. If any operation
-    fails, or the patched model does not compile, NOTHING is written. Untouched
-    parts of the file stay byte-identical. The model must have no uncommitted
-    changes (so the commit contains only this patch).
+    All operations are applied in order. If any operation fails, or the patched
+    model does not compile, NOTHING is written. Untouched parts of the file stay
+    byte-identical. The model must have no uncommitted changes, so that the commit
+    contains only this patch.
 
     Args:
-      model: model name or path inside ``models/``.
-      operations: list of objects, each with an ``op`` field:
-        - {"op": "set_declaration", "scope": "global" | "system" | <template>, "text": "..."}
-        - {"op": "replace_in_declaration", "scope": ..., "old": "...", "new": "..."}
-          (``old`` must occur exactly once)
-        - {"op": "set_guard" | "set_sync" | "set_update" | "set_select",
-           "template": "Train", <edge selector>, "value": "x >= 15"}
-          (value "" removes the label)
-        - {"op": "set_invariant", "template": "Gate", "location": "Lowering", "value": "y <= 10"}
-        - {"op": "add_edge", "template": ..., "from": "A", "to": "B",
-           "guard"?: ..., "sync"?: ..., "update"?: ..., "select"?: ...}
-        - {"op": "remove_edge", "template": ..., <edge selector>}
-        - {"op": "add_location", "template": ..., "name": "Wait", "invariant"?: ...,
-           "kind"?: "normal" | "urgent" | "committed"}
-        - {"op": "remove_location", "template": ..., "location": "Wait"}
-          (also removes its incident edges; the initial location cannot be removed)
-        Edge selector: ``"edge": <index from read_model>``, or ``"edge_id": "id4"``,
-        or ``"from": "Near", "to": "Cross"`` (must match exactly one edge).
+        model:       model name or path inside models/
+        operations:  list of edits, each an object with an "op" field (see below)
+        reason:      why the change is made; used in the commit message, e.g.
+                     "Fix R2: train must not enter the crossing before the gate is down"
+        dry_run:     if true, check and return the diff without writing or committing
+
+    Operations:
+        {"op": "set_declaration", "scope": "global" | "system" | <template>, "text": "..."}
+        {"op": "replace_in_declaration", "scope": ..., "old": "...", "new": "..."}
+            `old` must occur exactly once
+        {"op": "set_guard" | "set_sync" | "set_update" | "set_select",
+         "template": "Train", <edge selector>, "value": "x > 15"}
+            value "" removes the label
+        {"op": "set_invariant", "template": "Gate", "location": "Lowering", "value": "y <= 10"}
+        {"op": "add_edge", "template": ..., "from": "A", "to": "B",
+         "guard"?: ..., "sync"?: ..., "update"?: ..., "select"?: ...}
+        {"op": "remove_edge", "template": ..., <edge selector>}
+        {"op": "add_location", "template": ..., "name": "Wait",
+         "invariant"?: ..., "kind"?: "normal" | "urgent" | "committed"}
+        {"op": "remove_location", "template": ..., "location": "Wait"}
+            also removes its incident edges; the initial location cannot be removed
+
+        Edge selector, one of:
+            "edge": <index from read_model>
+            "edge_id": "id4"
+            "from": "Near", "to": "Cross"   (must match exactly one edge)
         Locations are referred to by name (or id).
-      reason: why this change is made (used in the commit message), e.g.
-        "Fix R2: train must not enter the crossing before the gate is down".
-      dry_run: if true, check and return the diff without writing or committing.
 
     Returns:
-      ``{"status": "ok" | "syntax_error" | "error", "dry_run", "changes": [...],
-      "behaviour_warnings": [{"op_index", "severity", "message"}],
-      "removes_behaviour": bool, "diff", "commit", "errors", "next_step"}``.
-      ``severity`` "removes_behaviour" (edge/location removed, guard or invariant set
-      to false) means the patch deletes executions: such a patch can make a property
-      pass by hiding the scenario instead of fixing it - say so to the user.
-      "may_change_behaviour" marks changed guards, invariants, syncs and
-      declarations. On "syntax_error", ``errors`` lists compiler errors with
-      ``file_line`` in the patched model; the file is unchanged.
+        status:              "ok" | "syntax_error" | "error"
+        changes:             one readable line per applied operation
+        behaviour_warnings:  [{op_index, severity, message}]
+        removes_behaviour:   true if any warning has severity "removes_behaviour"
+        diff:                unified diff of the model file
+        commit:              commit hash (null for dry runs and failures)
+        errors:              on "syntax_error": compiler errors with file_line in the
+                             patched model (the file itself is unchanged)
+        dry_run, model, next_step
+
+    Warning severities:
+        removes_behaviour     an edge or location was removed, or a guard or invariant
+                              set to false. The patch deletes executions and may make a
+                              property pass by hiding the scenario: tell the user.
+        may_change_behaviour  a guard, invariant, synchronisation or declaration changed
     """
     ws = _ws()
     mpath = ws.model_path(model)
@@ -567,16 +599,16 @@ async def patch_model(model: str, operations: list[dict[str, Any]], reason: str,
     except WorkspaceError as e:
         mpath.write_text(original, encoding="utf-8")
         return _error(f"{e}. The model file was restored.")
-    approved = ws.approved_queries_for(mpath)
+    confirmed = ws.confirmed_queries_for(mpath)
     return {
         "status": "ok",
         **result,
         "diff": ws.git("show", "--format=", "--no-color", commit, "--", rel).stdout or diff,
         "commit": commit,
         "next_step": (
-            f"Re-run the FULL approved suite: verify(model={mpath.stem!r})"
-            if approved.is_file()
-            else "No approved suite exists for this model; verify the relevant queries."
+            f"Re-run ALL confirmed requirements: verify(model={mpath.stem!r})"
+            if confirmed.is_file()
+            else "This model has no confirmed requirements; verify the relevant queries."
         ),
     }
 
@@ -584,32 +616,41 @@ async def patch_model(model: str, operations: list[dict[str, Any]], reason: str,
 @mcp.tool()
 @safe_tool
 async def propose_query(model: str, requirement: str, uppaal_queries: list[str], file: str | None = None) -> dict[str, Any]:
-    """Record a formalized requirement as proposed queries in ``queries/proposed/``.
+    """Record a formalized requirement as candidate queries in queries/candidates/.
 
-    The user only gives the requirement in natural language. YOU (the agent) write
-    the UPPAAL queries that formalize it - the user never types them. Read the model
-    first (read_model) to use the exact process, location and variable names, and
-    see uppaal://docs/query-language. This tool type-checks your queries against the
-    model and appends them, each preceded by ``/* REQ: <requirement> */``, to a
-    proposed query file. Approved queries in ``queries/`` are read-only: only the user
-    approves a query by moving it into ``queries/<model>.q``.
+    The user only states the requirement in natural language. YOU (the agent)
+    write the UPPAAL queries that formalize it; the user never types them.
+    First call read_model to use the exact process, location and variable names,
+    and read uppaal://docs/query-language.
+
+    This tool type-checks your queries against the model and appends them to a
+    candidate file, each preceded by /* REQ: <requirement> */. Confirmed
+    requirements in queries/ are read-only: only the user confirms a candidate,
+    by moving it into queries/<model>.q.
 
     Args:
-      model: model name or path inside ``models/``.
-      requirement: the requirement in natural language, as stated by the user.
-      uppaal_queries: your formalization: one or more symbolic queries (A[], E<>, A<>,
-        E[], -->), one line each. Use several when the requirement has several parts, e.g. a
-        safety part and a liveness part, and add an ``E<>`` sanity check when an
-        ``A[] (p imply q)`` query could hold vacuously.
-      file: optional file name inside ``queries/proposed/`` (default ``<model>.q``).
+        model:           model name or path inside models/
+        requirement:     the requirement in natural language, as stated by the user
+        uppaal_queries:  your formalization: one or more symbolic queries
+                         (A[], E<>, A<>, E[], -->), one per list entry. Use several
+                         when the requirement has several parts (e.g. safety and
+                         liveness), and add an E<> sanity check when an
+                         A[] (p imply q) query could hold vacuously.
+        file:            optional file name inside queries/candidates/
+                         (default "<model>.q")
 
     Returns:
-      ``{"status": "ok", "query_file", "entries": [{"formula", "line"}], ...}`` or
-      ``{"status": "errors", "errors": [{"formula_index", "formula", "message"}]}``
-      (nothing written). ``already_approved`` lists queries that already exist in
-      the approved suite. Next: show the requirement and your queries to the user,
-      explain in plain words what each one checks, and wait for their approval
-      BEFORE calling ``verify(model, query_file=<query_file>)``.
+        status:            "ok" | "errors" | "error"
+        query_file:        the candidate file written
+        entries:           [{formula, line}]
+        already_confirmed: queries that are already confirmed requirements
+        errors:            on "errors": [{formula_index, formula, message, source}];
+                           nothing was written
+        requirement, next_step
+
+    Next: show the requirement and your queries to the user, explain in plain
+    words what each one checks, and wait for their confirmation BEFORE calling
+    verify(model, query_file=<query_file>).
     """
     ws = _ws()
     mpath = ws.model_path(model)
@@ -657,9 +698,9 @@ async def propose_query(model: str, requirement: str, uppaal_queries: list[str],
         }
 
     req = " ".join(requirement.replace("*/", "* /").split())
-    approved = ws.approved_queries_for(mpath)
-    approved_formulas = (
-        {" ".join(q.formula.split()) for q in vt.parse_query_file(approved.read_text())} if approved.is_file() else set()
+    confirmed = ws.confirmed_queries_for(mpath)
+    confirmed_formulas = (
+        {" ".join(q.formula.split()) for q in vt.parse_query_file(confirmed.read_text())} if confirmed.is_file() else set()
     )
     existing = target.read_text(encoding="utf-8") if target.is_file() else ""
     prefix = "" if not existing or existing.endswith("\n\n") else ("\n" if existing.endswith("\n") else "\n\n")
@@ -676,10 +717,10 @@ async def propose_query(model: str, requirement: str, uppaal_queries: list[str],
         "query_file": ws.rel(target),
         "requirement": req,
         "entries": [{"formula": f, "line": start_line + 2 * i + 1} for i, f in enumerate(cleaned)],
-        "already_approved": [f for f in cleaned if f in approved_formulas],
+        "already_confirmed": [f for f in cleaned if f in confirmed_formulas],
         "next_step": (
             "Show the requirement and formulas to the user and ask them to confirm the formalization. "
-            f"After approval run verify(model={mpath.stem!r}, query_file={ws.rel(target)!r})."
+            f"After they confirm, run verify(model={mpath.stem!r}, query_file={ws.rel(target)!r})."
         ),
     }
 
@@ -690,18 +731,18 @@ async def propose_query(model: str, requirement: str, uppaal_queries: list[str],
 
 
 @mcp.resource(
-    "uppaal://queries",
-    name="approved-queries-index",
-    description="Index of approved query files (read-only) with their queries and requirements.",
+    "uppaal://requirements",
+    name="confirmed-requirements-index",
+    description="Index of the confirmed requirements (read-only) of every model, with their queries.",
     mime_type="application/json",
 )
-def approved_queries_index() -> str:
+def confirmed_requirements_index() -> str:
     ws = _ws()
     files = []
     for p in sorted(ws.queries_dir.glob("*.q")):
         files.append(
             {
-                "uri": f"uppaal://queries/{p.stem}",
+                "uri": f"uppaal://requirements/{p.stem}",
                 "file": ws.rel(p),
                 "model": p.stem,
                 "queries": [
@@ -710,16 +751,16 @@ def approved_queries_index() -> str:
                 ],
             }
         )
-    return json.dumps({"approved_query_files": files}, indent=2)
+    return json.dumps({"confirmed_requirement_files": files}, indent=2)
 
 
 @mcp.resource(
-    "uppaal://queries/{name}",
-    name="approved-query-file",
-    description="Content of an approved query file queries/<name>.q (read-only).",
+    "uppaal://requirements/{name}",
+    name="confirmed-requirements-file",
+    description="Confirmed requirements of one model: the file queries/<name>.q (read-only).",
     mime_type="text/plain",
 )
-def approved_query_file(name: str) -> str:
+def confirmed_requirements_file(name: str) -> str:
     ws = _ws()
     stem = name.removesuffix(".q")
     try:
@@ -727,7 +768,7 @@ def approved_query_file(name: str) -> str:
     except WorkspaceError as e:
         raise ResourceError(str(e)) from None
     if p.parent != ws.queries_dir.resolve() or not p.is_file():
-        raise ResourceNotFoundError(f"No approved query file queries/{stem}.q; see uppaal://queries")
+        raise ResourceNotFoundError(f"No confirmed requirements file queries/{stem}.q; see uppaal://requirements")
     return p.read_text(encoding="utf-8")
 
 
@@ -763,9 +804,9 @@ verifyta is the only source of truth. Never state a verdict you did not get from
    process, location and variable names. Translate the requirement into one or more
    symbolic queries. Add an `E<>` sanity check when an implication could hold vacuously.
    Call `propose_query(model, requirement, uppaal_queries)`. Show the user the requirement,
-   each formula and what it means in plain words, and WAIT for their approval.
-2. **Check, then verify.** `check_syntax` (with the proposed query file), then
-   `verify(model, query_file=<proposed file>)`.
+   each formula and what it means in plain words, and WAIT for their confirmation.
+2. **Check, then verify.** `check_syntax` (with the candidate query file), then
+   `verify(model, query_file=<candidate file>)`.
 3. **If violated:** `get_trace(run_id, query_index)`. Explain the scenario step by step in
    plain language, citing step numbers, locations, variable values and clock constraints.
 4. **Diagnose** and say which it is:
@@ -775,10 +816,10 @@ verifyta is the only source of truth. Never state a verdict you did not get from
 5. **Fix.** For a design bug or modeling error, propose a minimal change with
    `patch_model(..., dry_run=true)`, show the diff, and apply it after approval. Point out
    every `behaviour_warnings` entry; a patch with `removes_behaviour: true` may only hide
-   the problem. Then re-run the FULL approved suite: `verify(model)` with no query
-   arguments, plus the proposed queries. Report every verdict.
+   the problem. Then re-run ALL confirmed requirements: `verify(model)` with no query
+   arguments, plus the candidate queries. Report every verdict.
    For a mis-formalized requirement, propose a corrected query (step 1) instead.
-6. **Never** weaken, edit or delete approved queries in `queries/` to make them pass.
+6. **Never** weaken, edit or delete confirmed requirements in `queries/` to make them pass.
 7. **On timeout** (or `maybe`/`error`): the result is UNKNOWN, never "satisfied". Try another
    `search_order` (e.g. "dfs"), a smaller model instance or tighter variable bounds, and
    explain the trade-off: DFS or random DFS may find a counterexample sooner, but proving

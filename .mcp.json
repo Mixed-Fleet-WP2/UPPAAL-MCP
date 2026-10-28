@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "uppaal": {
+      "type": "stdio",
+      "command": "/home/user/Desktop/Projects/uppaal_mcp/.venv/bin/python",
+      "args": [
+        "-m",
+        "server.main"
+      ],
+      "env": {
+        "VERIFYTA": "/home/user/Desktop/uppaal-5.0.0-linux64/bin/verifyta",
+        "UPPAAL_WORKSPACE": "/home/user/Desktop/Projects/uppaal_mcp"
+      }
+    }
+  }
+}

@@ -153,7 +153,7 @@ def test_build_command_rejects_bad_options(kwargs: dict[str, str]) -> None:
 @live
 def test_live_train_gate_with_trace(tmp_path: Path) -> None:
     run = vt.verify(
-        ROOT / "models/train_gate.xml", ROOT / "queries/train_gate.q", trace_type="some", trace_dir=tmp_path
+        FIX / "train_gate.xml", FIX / "train_gate.q", trace_type="some", trace_dir=tmp_path
     )
     assert run.status == "ok"
     assert [r.verdict for r in run.queries] == [Verdict.SATISFIED, Verdict.VIOLATED]
@@ -162,7 +162,7 @@ def test_live_train_gate_with_trace(tmp_path: Path) -> None:
 
 @live
 def test_live_inline_query() -> None:
-    run = vt.verify(ROOT / "models/train_gate.xml", query_text="E<> train.Cross")
+    run = vt.verify(FIX / "train_gate.xml", query_text="E<> train.Cross")
     assert run.queries[0].verdict is Verdict.SATISFIED
 
 
@@ -176,7 +176,7 @@ def test_live_timeout() -> None:
 
 @live
 def test_live_compile_error() -> None:
-    run = vt.verify(FIX / "syntax_error.xml", ROOT / "queries/train_gate.q")
+    run = vt.verify(FIX / "syntax_error.xml", FIX / "train_gate.q")
     assert run.status == "compile_error"
     assert all(r.verdict is Verdict.ERROR for r in run.queries)
 
@@ -190,4 +190,4 @@ def test_live_memory_limit_is_not_satisfied() -> None:
 @live
 def test_live_rejects_smc() -> None:
     with pytest.raises(vt.VerifytaOptionError, match="not supported"):
-        vt.verify(ROOT / "models/train_gate.xml", query_text="Pr[<=10](<> train.Cross)")
+        vt.verify(FIX / "train_gate.xml", query_text="Pr[<=10](<> train.Cross)")
