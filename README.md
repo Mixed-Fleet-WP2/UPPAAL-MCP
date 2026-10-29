@@ -16,6 +16,12 @@ The server applies a fix only after you approve it, and commits each fix to git.
 
 ## What it looks like
 
+[![▶ Click to watch the uppaal-mcp demo video on YouTube](https://img.youtube.com/vi/4Jb_So3kxsI/maxresdefault.jpg)](https://youtu.be/4Jb_So3kxsI)
+
+**▶ Click the thumbnail above to watch the demo video on YouTube.**
+
+<img src="uppaal-claude.png" alt="UPPAAL MCP running with Claude Code" width="800">
+
 ```
 You:    Check that the gate is always down while the train is in the crossing.
 
